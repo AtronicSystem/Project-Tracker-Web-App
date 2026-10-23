@@ -2,7 +2,10 @@
 import { createClient } from 'https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2.45.4/+esm';
 
 const CFG = window.TRACKER_CONFIG || {};
-const sb = window.__SB__ || createClient(CFG.SUPABASE_URL, CFG.SUPABASE_ANON_KEY);
+// Accept the URL however it was pasted (e.g. with /rest/v1/ or a trailing slash) — the client needs just https://xxxx.supabase.co
+const SB_URL = (()=>{try{return new URL(String(CFG.SUPABASE_URL||'').trim()).origin}catch(e){return ''}})();
+const SB_KEY = String(CFG.SUPABASE_ANON_KEY||'').trim();
+const sb = window.__SB__ || (SB_URL && SB_KEY && !/YOUR-PROJECT/.test(SB_URL) ? createClient(SB_URL, SB_KEY) : null);
 const BUCKET = 'project-docs';
 
 /* ---------- constants ---------- */
@@ -63,7 +66,10 @@ function coerce(k,v){const f=FMAP[k];if(!f)return null;if(f.num)return num(v);if
 const fmtVal=(k,v)=>v==null||v===''?'':(FMAP[k]&&FMAP[k].type==='date'?fmtDate(v):FMAP[k]&&FMAP[k].num?fmtN(v):String(v));
 const fmtSize=b=>!b?'':b>=1048576?(b/1048576).toFixed(1)+' MB':Math.max(1,Math.round(b/1024))+' KB';
 function toast(msg,ms=3600){const t=$('#toast');t.textContent=msg;t.classList.add('show');clearTimeout(toast._t);toast._t=setTimeout(()=>t.classList.remove('show'),ms)}
-const errMsg=e=>(e&&(e.message||e.error_description))||'Something went wrong. Check your connection and try again.';
+const errMsg=e=>{const m=(e&&(e.message||e.error_description))||'Something went wrong. Check your connection and try again.';
+  if(/invalid path specified|no api key|invalid api key|failed to fetch/i.test(m))return 'Can’t reach the database: check SUPABASE_URL (just https://xxxx.supabase.co) and SUPABASE_ANON_KEY in config.js.';
+  if(/could not find the function|schema cache/i.test(m))return 'The database isn’t set up yet: run supabase/schema.sql in the Supabase SQL Editor.';
+  return m};
 async function rpc(fn,args={}){const {data,error}=await sb.rpc(fn,args);if(error)throw error;return data}
 function askConfirm(msg,okLabel='OK',danger=false){return new Promise(res=>{let el=document.getElementById('cfm');if(!el){el=document.createElement('div');el.id='cfm';document.body.appendChild(el)}
   el.innerHTML=`<div class="cfm-box" role="alertdialog" aria-modal="true"><p></p><div class="row" style="justify-content:flex-end;margin-top:16px"><button class="btn" data-c="0">Cancel</button><button class="btn ${danger?'danger':'pri'}" data-c="1">${esc(okLabel)}</button></div></div>`;
@@ -151,7 +157,7 @@ async function purgeExpired(){try{const ids=await rpc('expired_projects');for(co
 
 /* ---------- auth ---------- */
 async function initAuth(){
-  if(!window.__SB__&&(!CFG.SUPABASE_URL||/YOUR-PROJECT/.test(CFG.SUPABASE_URL))){S.auth='config';render();return}
+  if(!sb){S.auth='config';render();return}
   sb.auth.onAuthStateChange((ev,session)=>{
     if(ev==='PASSWORD_RECOVERY'){S.session=session;S.auth='reset';render();return}
     if(ev==='SIGNED_OUT'){S.session=null;S.me=null;S.auth='signin';S.pd={};S.projects=[];render();return}
