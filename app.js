@@ -9,7 +9,7 @@ const sb = window.__SB__ || (SB_URL && SB_KEY && !/YOUR-PROJECT/.test(SB_URL) ? 
 const BUCKET = 'project-docs';
 
 /* ---------- constants ---------- */
-const SEC_COLORS=['#1F5FBF','#0E8C8C','#7A4FC9','#C23B30','#D9731A','#5D6B7E','#2F8F5B','#8A6D1F','#B0417A','#3B7A99'];
+const SEC_COLORS=['#24425E','#0E8C8C','#7A4FC9','#C23B30','#D9731A','#5D6B7E','#2F8F5B','#8A6D1F','#B0417A','#3B7A99'];
 const APPROVAL=['','Pending','Submitted','Approved','NA'];
 const FIELDS=[
   {k:'section',l:'ELV system',cat:'data'},{k:'sr',l:'Sr. no.',cat:'data'},
@@ -171,23 +171,24 @@ async function startApp(){
   try{S.me=await rpc('whoami');S.auth='app';await refresh(false)}catch(e){S.auth='signin';S.authMsg=errMsg(e);render()}
 }
 function vAuth(){
-  const brand=`<div class="brand" style="margin:0"><span class="mark" aria-hidden="true"></span><div><div class="b1">Project tracker</div><div class="b2">${esc(CFG.COMPANY||'')} · ELV & IT installation progress</div></div></div>`;
+  const brand=`<div class="authlogo"><span class="logo-chip"><img src="atronic-logo.png" alt="Atronic — Solution Re Imagined"></span><div class="t">Project Tracker</div></div>`;
+  const foot=`<div class="authfoot">Atronic Systems Pvt. Ltd · <a href="https://www.atronic.co.in" target="_blank" rel="noopener">www.atronic.co.in</a></div>`;
   const msg=S.authMsg?`<div class="err" role="alert">${esc(S.authMsg)}</div>`:'';
-  if(S.auth==='config')return `<div class="auth"><div class="authbox">${brand}<h1>Almost there</h1><p class="muted">Open <code>config.js</code> and fill in your Supabase project URL and anon key, then reload. See README.md for the steps.</p></div></div>`;
+  if(S.auth==='config')return `<div class="auth"><div class="authbox">${brand}<h1>Almost there</h1><p class="muted">Open <code>config.js</code> and fill in your Supabase project URL and anon key, then reload. See README.md for the steps.</p></div>${foot}</div>`;
   if(S.auth==='loading')return `<div class="empty"><span class="spin"></span></div>`;
   if(S.auth==='signup')return `<div class="auth"><form class="authbox" data-submit="signup">${brand}<h1>Create your account</h1><p class="muted" style="margin:0 0 14px">Use the email address your admin added to the project.</p>
     <div class="form"><label>Your name<input name="name" required autocomplete="name"></label><label>Email<input name="email" type="email" required autocomplete="email"></label><label>Password<input name="password" type="password" minlength="8" required autocomplete="new-password"></label></div>${msg}
-    <button class="btn pri" style="margin-top:16px">Create account</button><div class="authlinks"><button type="button" class="lnk" data-act="authMode" data-m="signin">I already have an account</button></div></form></div>`;
+    <button class="btn pri" style="margin-top:16px">Create account</button><div class="authlinks"><button type="button" class="lnk" data-act="authMode" data-m="signin">I already have an account</button></div></form>${foot}</div>`;
   if(S.auth==='forgot')return `<div class="auth"><form class="authbox" data-submit="forgot">${brand}<h1>Reset your password</h1><p class="muted" style="margin:0 0 14px">We’ll email you a link to set a new password.</p>
     <div class="form"><label>Email<input name="email" type="email" required autocomplete="email"></label></div>${msg}<button class="btn pri" style="margin-top:16px">Send reset link</button>
-    <div class="authlinks"><button type="button" class="lnk" data-act="authMode" data-m="signin">Back to sign in</button></div></form></div>`;
+    <div class="authlinks"><button type="button" class="lnk" data-act="authMode" data-m="signin">Back to sign in</button></div></form>${foot}</div>`;
   if(S.auth==='reset')return `<div class="auth"><form class="authbox" data-submit="reset">${brand}<h1>Set a new password</h1>
-    <div class="form"><label>New password<input name="password" type="password" minlength="8" required autocomplete="new-password"></label></div>${msg}<button class="btn pri" style="margin-top:16px">Save password</button></form></div>`;
-  if(S.auth==='checkmail')return `<div class="auth"><div class="authbox">${brand}<h1>Check your email</h1><p class="muted">${esc(S.authMsg2||'We sent you a link. Open it to continue.')}</p><div class="authlinks"><button class="lnk" data-act="authMode" data-m="signin">Back to sign in</button></div></div></div>`;
+    <div class="form"><label>New password<input name="password" type="password" minlength="8" required autocomplete="new-password"></label></div>${msg}<button class="btn pri" style="margin-top:16px">Save password</button></form>${foot}</div>`;
+  if(S.auth==='checkmail')return `<div class="auth"><div class="authbox">${brand}<h1>Check your email</h1><p class="muted">${esc(S.authMsg2||'We sent you a link. Open it to continue.')}</p><div class="authlinks"><button class="lnk" data-act="authMode" data-m="signin">Back to sign in</button></div></div>${foot}</div>`;
   return `<div class="auth"><form class="authbox" data-submit="signin">${brand}<h1>Sign in</h1>
     <div class="form"><label>Email<input name="email" type="email" required autocomplete="email"></label><label>Password<input name="password" type="password" required autocomplete="current-password"></label></div>${msg}
     <button class="btn pri" style="margin-top:16px">Sign in</button>
-    <div class="authlinks"><button type="button" class="lnk" data-act="authMode" data-m="signup">Create an account</button><button type="button" class="lnk" data-act="authMode" data-m="forgot">Forgot password?</button></div></form></div>`;
+    <div class="authlinks"><button type="button" class="lnk" data-act="authMode" data-m="signup">Create an account</button><button type="button" class="lnk" data-act="authMode" data-m="forgot">Forgot password?</button></div></form>${foot}</div>`;
 }
 async function authSubmit(kind,form){
   const v=Object.fromEntries(new FormData(form));const btn=form.querySelector('button.pri');btn.disabled=true;S.authMsg='';
@@ -206,14 +207,14 @@ function doRender(){
   if(S.auth!=='app'){$('#app').innerHTML=vAuth();return}
   const pd=PD();S.M=pd?pd._merged:{items:[],lots:[]};
   const a=document.activeElement,inD=a&&a.closest&&a.closest('#drawer');const aid=!inD&&a&&a.id,sel=aid&&('selectionStart' in a)?[a.selectionStart,a.selectionEnd]:null;
-  const sig=[S.view,S.pid,S.ptab,S.docSec].join('|');const keep={};if(S._sig===sig)document.querySelectorAll('#main input,#main select,#main textarea').forEach(el=>{const k=el.id||el.name;if(k&&el.type!=='file'&&el.type!=='checkbox'&&!el.dataset.change&&!el.dataset.input)keep[k]=el.value});S._sig=sig;
+  const sig=[S.view,S.pid,S.ptab,S.docSec].join('|');const keep={};if(S._sig===sig)document.querySelectorAll('#main input,#main select,#main textarea').forEach(el=>{const k=el.id||el.name;if(k&&el.type!=='checkbox'&&!el.dataset.change&&!el.dataset.input&&(el.type!=='file'||el.files.length))keep[k]=el.type==='file'?el:el.value});S._sig=sig;
   $('#app').innerHTML=header()+nav()+`<main id="main">${view()}</main>`;
-  document.querySelectorAll('#main input,#main select,#main textarea').forEach(el=>{const k=el.id||el.name;if(k&&k in keep&&el.type!=='file'&&!el.dataset.change&&!el.dataset.input)el.value=keep[k]});
+  document.querySelectorAll('#main input,#main select,#main textarea').forEach(el=>{const k=el.id||el.name;if(k&&k in keep&&!el.dataset.change&&!el.dataset.input){if(el.type==='file')el.replaceWith(keep[k]);else el.value=keep[k]}});
   if(aid){const n=document.getElementById(aid);if(n){n.focus();if(sel)try{n.setSelectionRange(sel[0],sel[1])}catch(e){}}}
   if(S.drawerId!==undefined)refreshDrawer();
 }
 function header(){const n=S.me.name||S.me.email;const ini=n.replace(/@.*/,'').split(/[\s._-]+/).map(w=>w[0]).slice(0,2).join('').toUpperCase();
-  return `<header class="top"><div class="brand"><span class="mark" aria-hidden="true"></span><div><div class="b1">Project tracker</div><div class="b2">${esc(CFG.COMPANY||'')} · ELV & IT installation progress</div></div></div>
+  return `<header class="top"><div class="brand"><span class="logo-chip"><img class="logo" src="atronic-wordmark.png" alt="Atronic"></span><span class="bdiv" aria-hidden="true"></span><div><div class="b1">Project Tracker</div><div class="b2">ELV & IT installation progress</div></div></div>
   <button class="refresh" data-act="refresh" title="Reload data">↻ Refresh</button>
   <div class="umenu"><button class="who" data-act="umenu" aria-haspopup="true"><span class="ini">${esc(ini)}</span><div style="text-align:left"><div class="wn">${esc(n)}</div><div class="role ${isAdmin()?'r-admin':'r-site'}">${isAdmin()?'Admin':'Team member'}</div></div></button>
     <div class="udrop" id="udrop"><button data-act="editName">Change my name</button><button data-act="changePw">Change password</button><button data-act="signOut">Sign out</button></div></div></header>`}
