@@ -242,7 +242,7 @@ function view(){
 function vEmpty(){return `<div class="empty"><h1>No projects yet</h1>${isAdmin()?`<p class="muted">Import a BOQ, or start from a blank project.</p><div class="row" style="justify-content:center;margin-top:16px"><button class="btn pri" data-act="newProject">+ New project</button></div>`:''}</div>`}
 
 /* overview */
-const METRICS=[['dr','Drawing approval','#7A4FC9','status'],['ta','TDS approval','#0E8C8C','status'],['d','Supply','var(--accent)','delivery'],['i','Installation','var(--ok)','install'],['t','Testing','#D9731A','testing']];
+const METRICS=[['dr','Drawing approval','#7A4FC9','status'],['ta','TDS approval','#0E8C8C','status'],['d','Supply','var(--accent)','delivery'],['i','Installation','var(--ok)','install'],['t','Testing','#D9731A','testing'],['c','Commissioning','#0E7490','commission'],['h','Handing over','#B0417A','handover']];
 const mcell=(v,c)=>v==null?'<td class="num muted">—</td>':`<td><div class="mc"><span>${pct(v)}</span><div class="mb"><i style="width:${(v*100).toFixed(1)}%;background:${c}"></i></div></div></td>`;
 function vOverview(){
   const live=S.projects.filter(p=>!p.deleted_at);if(!live.length)return vEmpty();
@@ -257,7 +257,7 @@ function vOverview(){
   return `<h1 style="font-size:22px">Overview</h1><p class="muted" style="margin:4px 0 14px">Progress of ongoing projects. Click a project to open its tracker.${doneN?` Completed projects (${doneN}) are under ${link}.`:''}</p>
   <div class="tbl-wrap"><table class="ovt"><thead><tr><th>Project</th>${METRICS.map(([,l,c])=>`<th><span class="key" style="background:${c}"></span> ${l}</th>`).join('')}</tr></thead>
   <tbody>${rows}</tbody>${tot?`<tfoot><tr><td><strong>All projects</strong><div class="muted" style="font-size:12px">${tot.n} items</div></td>${METRICS.map(([k,,c])=>mcell(tot[k],c)).join('')}</tr></tfoot>`:''}</table></div>
-  <p class="muted" style="font-size:12.5px">Drawing and TDS approval: share of line items marked Approved (or NA). Supply, installation and testing: quantity done against the new WO quantity, averaged across line items with each item capped at 100%.</p>`;
+  <p class="muted" style="font-size:12.5px">Drawing and TDS approval: share of line items marked Approved (or NA). Supply, installation, testing, commissioning and handing over: quantity done against the new WO quantity, averaged across line items with each item capped at 100%.</p>`;
 }
 
 /* projects */
