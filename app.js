@@ -41,7 +41,7 @@ const CATS=[
   {k:'commission',l:'Commissioning',hint:'Commissioned quantity lots with date'},
   {k:'handover',l:'Handing over',hint:'Quantity handed over to the client, with date'},
   {k:'billing',l:'Billing',hint:'Billed quantity lots with invoice / RA bill details'},
-  {k:'docs',l:'Documents',hint:'Approved drawings, TDS, approval letters, challans and RA bills'},
+  {k:'docs',l:'Documents',hint:'Approved drawings, TDS, approval letters, challans, RA bills, invoices and test certificates'},
 ];
 const CATMAP=Object.fromEntries(CATS.map(c=>[c.k,c]));
 const CAT_FIELDS={data:FIELDS.filter(f=>f.cat==='data').map(f=>f.k),status:FIELDS.filter(f=>f.cat==='status').map(f=>f.k)};
@@ -55,7 +55,7 @@ const KIND={delivery:{tot:'dTot',date:'dDate',open:'delivered',openDate:'deliver
   billing:{ref:'Invoice / RA bill no.'}};
 const LVL_LABEL={edit:'Can edit',request:'Needs approval',none:'Only see',hide:'No access'};
 const DEFAULT_LEVELS={data:'none',status:'request',delivery:'request',install:'request',testing:'request',commission:'request',handover:'request',billing:'hide',docs:'none'};
-const DOCSECS=[{k:'drawing',l:'Approved drawings',sys:1,no:'Drawing no.',rev:1},{k:'tds',l:'Approved TDS',sys:1,no:'TDS / datasheet ref.',rev:1},{k:'letter',l:'Approval letters',no:'Letter ref. no.'},{k:'challan',l:'Delivery challans',no:'Challan / DC no.',needs:'delivery'},{k:'rabill',l:'RA bills',no:'RA bill no.',needs:'billing'}];
+const DOCSECS=[{k:'drawing',l:'Approved drawings',sys:1,no:'Drawing no.',rev:1},{k:'tds',l:'Approved TDS',sys:1,no:'TDS / datasheet ref.',rev:1},{k:'letter',l:'Approval letters',no:'Letter ref. no.'},{k:'challan',l:'Delivery challans',no:'Challan / DC no.',needs:'delivery'},{k:'rabill',l:'RA bills',no:'RA bill no.',needs:'billing'},{k:'invoice',l:'Invoices',no:'Invoice no.',needs:'billing'},{k:'testcert',l:'Test certificates',sys:1,no:'Certificate / report no.',needs:'testing',dateL:'Test date',ph:'e.g. CCTV – Level 1 test report'}];
 const DOCMAP=Object.fromEntries(DOCSECS.map(d=>[d.k,d]));
 const DOC_EXT=['dwg','dxf','pdf','xls','xlsx','xlsm','csv','doc','docx','jpg','jpeg','png'];
 const KEEP_DAYS=7;
@@ -393,8 +393,8 @@ function vDocs(){
   const sysCount=d.sys?`<div class="row" style="gap:6px;margin:0 0 12px">${systems.map(sy=>{const n=list.filter(r=>r.system===sy&&r.status==='approved').length;return `<span class="st ${n?'ok':'plain'}">${esc(sy)} · ${n}</span>`}).join('')}</div>`:'';
   const form=canUp?`<div class="panel" style="margin-bottom:14px"><h2 style="margin-bottom:10px">Upload ${esc(d.l.replace(/s$/,'').toLowerCase())}</h2><div class="lotadd" style="background:none;padding:0">
     <label>ELV system${d.sys?' *':''}<select id="du_sys">${d.sys?'<option value="">Choose…</option>':'<option value="">— Not system-specific —</option>'}${systems.map(sy=>`<option>${esc(sy)}</option>`).join('')}</select></label>
-    <label>Title<input id="du_title" placeholder="${d.sys?'e.g. CCTV layout – Ground floor':'Optional'}"></label><label>${esc(d.no)}<input id="du_no"></label>
-    ${d.rev?'<label>Revision<input id="du_rev" placeholder="e.g. R2"></label>':''}<label>${d.sys?'Approval date':'Date'}<input id="du_date" type="date" value="${today()}"></label><label>Note<input id="du_note"></label>
+    <label>Title<input id="du_title" placeholder="${d.ph||(d.sys?'e.g. CCTV layout – Ground floor':'Optional')}"></label><label>${esc(d.no)}<input id="du_no"></label>
+    ${d.rev?'<label>Revision<input id="du_rev" placeholder="e.g. R2"></label>':''}<label>${d.dateL||(d.sys?'Approval date':'Date')}<input id="du_date" type="date" value="${today()}"></label><label>Note<input id="du_note"></label>
     <label style="grid-column:1/-1">File (DWG, DXF, PDF, Excel, Word, CSV, JPG, PNG · max 50 MB)<input id="du_file" type="file" accept=".${DOC_EXT.join(',.')}"></label>
     <button class="btn pri" data-act="uploadDoc">${lv==='request'?'Upload for approval':'Upload'}</button></div></div>`:'';
   return `<div class="row" style="margin-bottom:12px"><div class="seg">${secs.map(x=>`<button data-act="docSec" data-k="${x.k}" aria-pressed="${S.docSec===x.k}">${esc(x.l)} (${cnt(x.k)})</button>`).join('')}</div>
