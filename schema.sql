@@ -65,7 +65,7 @@ create table if not exists public.lots(
   project_id uuid not null references public.projects(id) on delete cascade,
   item_id uuid not null references public.items(id) on delete cascade,
   kind text not null,
-  bill text not null default 'material' check (bill in ('material','installation')),
+  bill text not null default 'material',
   qty numeric not null check (qty > 0),
   date text default '',
   ref text default '',
@@ -79,6 +79,9 @@ create table if not exists public.lots(
 create index if not exists lots_project on public.lots(project_id);
 alter table public.lots drop constraint if exists lots_kind_check;
 alter table public.lots add constraint lots_kind_check check (kind in ('delivery','install','testing','commission','handover','billing'));
+-- billing stages: drawing approval, supply (material), installation, testing, commissioning, handing over
+alter table public.lots drop constraint if exists lots_bill_check;
+alter table public.lots add constraint lots_bill_check check (bill in ('drawing','material','installation','testing','commission','handover'));
 
 create table if not exists public.changes(
   id uuid primary key default gen_random_uuid(),
@@ -185,21 +188,21 @@ create or replace function public.cat_keys(cat text) returns text[]
 language sql immutable as $$
   select case cat
     when 'base'     then array['section','sr','desc','qty','unit','woQty','header']
-    when 'data'     then array['make','model','vendor','poDate','contractor']
+    when 'data'     then array['make','model','vendor','poDate','pos','contractor']
     when 'status'   then array['drawing','drawingDate','tds','tdsDate','expStatus','pendingReason','delayReason','remarks']
     when 'delivery' then array['delivered','deliveryDate']
     when 'install'  then array['installed','installDate']
     when 'testing'  then array['tested','testDate']
     when 'commission' then array['commissioned','commissionDate']
     when 'handover' then array['handedOver','handoverDate']
-    when 'billing'  then array['billMat','billMatDate','billInst','billInstDate']
+    when 'billing'  then array['billDwg','billDwgDate','billMat','billMatDate','billInst','billInstDate','billTest','billTestDate','billComm','billCommDate','billHand','billHandDate']
     else array[]::text[] end $$;
 
 -- fields a person may change through an update request
 create or replace function public.edit_keys(cat text) returns text[]
 language sql immutable as $$
   select case cat
-    when 'data'   then array['section','sr','desc','qty','unit','woQty','make','model','vendor','poDate','contractor']
+    when 'data'   then array['section','sr','desc','qty','unit','woQty','make','model','vendor','poDate','pos','contractor']
     when 'status' then cat_keys('status')
     else array[]::text[] end $$;
 
@@ -303,7 +306,7 @@ begin
   if qty is null or qty <= 0 then raise exception 'Enter a quantity above zero.'; end if;
   st := case when l in ('admin','edit') then 'approved' else 'pending' end;
   insert into lots(project_id, item_id, kind, bill, qty, date, ref, note, status, direct, created_by, created_by_name)
-  values (pid, iid, kind, case when bill = 'installation' then 'installation' else 'material' end, qty, left(coalesce(d,''),10), left(coalesce(ref,''),200), left(coalesce(note,''),1000), st, st = 'approved', auth.uid(), my_name())
+  values (pid, iid, kind, case when kind = 'billing' and bill in ('drawing','material','installation','testing','commission','handover') then bill else 'material' end, qty, left(coalesce(d,''),10), left(coalesce(ref,''),200), left(coalesce(note,''),1000), st, st = 'approved', auth.uid(), my_name())
   returning id into newid;
   select coalesce(data->>'sr','') || ' ' || left(coalesce(data->>'desc',''),60) into lbl from items where id = iid;
   perform log_act(pid, (case when st = 'approved' then 'recorded ' else 'sent for approval: ' end) || kind || ' of ' || qty || ' for “' || trim(lbl) || '”', kind, iid);

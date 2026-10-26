@@ -110,6 +110,15 @@ table{border-collapse:collapse;width:100%}
 .ttbl td.num b{font-weight:700}
 .ttbl tr.it td{transition:background .1s}
 .ttbl tr.it:nth-child(even of .it) td{background:color-mix(in srgb,var(--soft) 55%,var(--panel))}
+.ttbl th,.ttbl td{text-align:center}
+.ttbl th.sk2,.ttbl td.sk2,.ttbl tr.grp td{text-align:left}
+.ttbl td.num,.ttbl th.num{text-align:center}
+.ttbl .pc .pv{justify-content:center}
+.ttbl th{vertical-align:middle;white-space:normal;min-width:70px;line-height:1.25}
+.ttbl td{vertical-align:middle}
+.pobtn{cursor:pointer;font:inherit;font-size:12px;font-weight:600}
+.pobtn:hover{filter:brightness(.95);text-decoration:underline}
+.poedit input{width:100%;min-width:90px;padding:6px 8px;border:1px solid var(--line);border-radius:6px;background:var(--panel)}
 .ttbl .sk1,.ttbl .sk2{position:sticky;background:var(--panel);z-index:1}
 .ttbl th.sk1,.ttbl th.sk2{z-index:3;background:var(--soft)}
 .ttbl .sk1{left:0;width:56px;min-width:56px;white-space:nowrap;color:var(--muted);font-weight:600}
@@ -134,8 +143,8 @@ table{border-collapse:collapse;width:100%}
 .pvrow select{padding:6px 8px;border:1px solid var(--line);border-radius:6px;background:var(--panel);max-width:100%}
 .pvnote{font-size:12.5px;background:color-mix(in srgb,var(--warn) 14%,transparent);color:var(--ink);padding:5px 10px;border-radius:6px}
 @media (max-width:700px){.ttbl .sk2{min-width:180px;max-width:220px}.tscroll{max-height:none}}
-.ttbl th{position:sticky;top:0;background:var(--soft);font-size:12px;color:var(--muted);font-weight:600;text-align:left;padding:9px 8px;border-bottom:1px solid var(--line);white-space:nowrap}
-.ttbl td{padding:8px;border-bottom:1px solid var(--line);vertical-align:top}
+.ttbl th{position:sticky;top:0;background:var(--soft);font-size:12px;color:var(--muted);font-weight:600;padding:9px 8px;border-bottom:1px solid var(--line);}
+.ttbl td{padding:8px;border-bottom:1px solid var(--line);vertical-align:middle}
 .ttbl tr.it{cursor:pointer}
 .ttbl tr.it:hover td{background:var(--soft)}
 .ttbl tr.hd td{color:var(--muted);font-style:italic}
