@@ -98,7 +98,7 @@ create index if not exists changes_project on public.changes(project_id);
 create table if not exists public.documents(
   id uuid primary key default gen_random_uuid(),
   project_id uuid not null references public.projects(id) on delete cascade,
-  sec text not null check (sec in ('drawing','tds','letter','challan','rabill')),
+  sec text not null,
   system text default '', title text default '', no text default '', rev text default '',
   date text default '', note text default '',
   file_path text not null unique, file_name text not null, size bigint default 0, ext text default '',
@@ -109,6 +109,8 @@ create table if not exists public.documents(
   deleted boolean not null default false
 );
 create index if not exists documents_project on public.documents(project_id);
+alter table public.documents drop constraint if exists documents_sec_check;
+alter table public.documents add constraint documents_sec_check check (sec in ('drawing','tds','letter','challan','rabill','invoice','testcert'));
 
 create table if not exists public.activity(
   id bigserial primary key,
@@ -204,7 +206,9 @@ language sql immutable as $$
 create or replace function public.doc_sec_ok(pid uuid, sec text) returns boolean
 language sql stable security definer set search_path = public as $$
   select can_see(pid,'docs') and case sec when 'challan' then can_see(pid,'delivery')
-                                         when 'rabill' then can_see(pid,'billing') else true end $$;
+                                         when 'rabill' then can_see(pid,'billing')
+                                         when 'invoice' then can_see(pid,'billing')
+                                         when 'testcert' then can_see(pid,'testing') else true end $$;
 
 create or replace function public.mask_item(pid uuid, d jsonb) returns jsonb
 language plpgsql stable security definer set search_path = public as $$
