@@ -434,8 +434,9 @@ begin
     insert into items(project_id, ord, data, updated_by_name) values (pid, coalesce((select max(ord)+1 from items where project_id = pid), 1), d, my_name()) returning id into id_;
     perform log_act(pid, 'added “' || left(coalesce(d->>'desc',''),60) || '”', null, id_);
   else
-    update items set data = d, updated_at = now(), updated_by_name = my_name() where id = id_ and project_id = pid;
-    perform log_act(pid, 'edited “' || left(coalesce(d->>'desc',''),60) || '”', null, id_);
+    -- merge only the fields sent, so two people editing different fields of the same item don't overwrite each other
+    update items set data = data || d, updated_at = now(), updated_by_name = my_name() where id = id_ and project_id = pid;
+    perform log_act(pid, 'edited “' || left(coalesce(d->>'desc',(select data->>'desc' from items where id = id_),''),60) || '”', null, id_);
   end if;
   if w is not null or p is not null or exists(select 1 from item_rates where item_id = id_) then
     insert into item_rates(item_id, project_id, w, p) values (id_, pid, w, p) on conflict (item_id) do update set w = excluded.w, p = excluded.p;
@@ -477,7 +478,7 @@ language plpgsql security definer set search_path = public as $$
 declare its jsonb; rts jsonb; keep text[] := cat_keys('base') || cat_keys('data');
 begin
   perform need_admin();
-  select coalesce(jsonb_agg((select coalesce(jsonb_object_agg(key, value),'{}'::jsonb) from jsonb_each(i.data) where key = any(keep) and key <> 'poDate') order by i.ord),'[]'::jsonb),
+  select coalesce(jsonb_agg((select coalesce(jsonb_object_agg(key, value),'{}'::jsonb) from jsonb_each(i.data) where key = any(keep) and key not in ('poDate','vendor','pos')) order by i.ord),'[]'::jsonb),
          coalesce(jsonb_agg(coalesce((select jsonb_build_object('w', r.w, 'p', r.p) from item_rates r where r.item_id = i.id), '{}'::jsonb) order by i.ord),'[]'::jsonb)
     into its, rts from items i where i.project_id = src;
   return create_project(meta, its, rts);
@@ -582,6 +583,110 @@ begin
   if lower(trim(em)) = me_email() then raise exception 'You can''t remove yourself. Ask another admin.'; end if;
   delete from admins where email = lower(trim(em));
 end $$;
+
+-- ---------- editing a lot ----------
+create or replace function public.update_lot(lid uuid, qty numeric, d text, ref text, note text, bill text default null)
+returns jsonb language plpgsql security definer set search_path = public as $$
+declare r lots; lv text; lbl text;
+begin
+  select * into r from lots where id = lid and not deleted;
+  if not found then raise exception 'Entry not found.'; end if;
+  lv := lvl(r.project_id, r.kind);
+  if r.status not in ('pending','approved') then raise exception 'Rejected or removed entries can''t be edited.'; end if;
+  if not (lv = 'admin' or (r.created_by = auth.uid() and (r.status = 'pending' and lv in ('edit','request') or (r.status = 'approved' and r.direct and lv = 'edit')))) then
+    raise exception 'You can''t edit this entry.' using errcode = '42501'; end if;
+  if qty is null or qty <= 0 then raise exception 'Enter a quantity above zero.'; end if;
+  update lots set qty = update_lot.qty, date = left(coalesce(d,''),10), ref = left(coalesce(update_lot.ref,''),200), note = left(coalesce(update_lot.note,''),1000),
+    bill = case when r.kind = 'billing' and update_lot.bill in ('drawing','material','installation','testing','commission','handover') then update_lot.bill else r.bill end
+   where id = lid;
+  select coalesce(data->>'sr','') || ' ' || left(coalesce(data->>'desc',''),60) into lbl from items where id = r.item_id;
+  perform log_act(r.project_id, 'edited a ' || r.kind || ' entry (' || r.qty || ' → ' || update_lot.qty || ') for “' || trim(lbl) || '”', r.kind, r.item_id);
+  return jsonb_build_object('id', lid, 'status', r.status);
+end $$;
+
+-- ---------- fast overview: progress figures per project, calculated in the database ----------
+create or replace function public.num_or_null(t text) returns numeric language plpgsql immutable as $$
+begin return nullif(trim(t),'')::numeric; exception when others then return null; end $$;
+
+create or replace function public.project_summaries() returns jsonb
+language plpgsql stable security definer set search_path = public as $$
+declare adm boolean := is_admin(); res jsonb;
+begin
+  if auth.uid() is null then return '[]'::jsonb; end if;
+  with p as (select id from projects where deleted_at is null and (adm or is_member(id))),
+  it as (
+    select i.id, i.project_id, i.data, coalesce(nullif(num_or_null(i.data->>'woQty'),0), num_or_null(i.data->>'qty')) t
+      from items i join p on p.id = i.project_id
+     where coalesce(i.data->>'header','false') <> 'true'),
+  tr as (select * from it where t > 0),
+  lt as (
+    select l.item_id,
+      sum(l.qty) filter (where l.kind = 'delivery') d, sum(l.qty) filter (where l.kind = 'install') i,
+      sum(l.qty) filter (where l.kind = 'testing') te, sum(l.qty) filter (where l.kind = 'commission') co,
+      sum(l.qty) filter (where l.kind = 'handover') ho, sum(l.qty) filter (where l.kind = 'billing' and l.bill = 'material') bm
+      from lots l join tr on tr.id = l.item_id where l.status = 'approved' and not l.deleted group by l.item_id),
+  f as (
+    select tr.project_id,
+      least(greatest(coalesce(num_or_null(tr.data->>'delivered'),0) + coalesce(lt.d,0),0) / tr.t, 1) d,
+      least(greatest(coalesce(num_or_null(tr.data->>'installed'),0) + coalesce(lt.i,0),0) / tr.t, 1) i,
+      least(greatest(coalesce(num_or_null(tr.data->>'tested'),0) + coalesce(lt.te,0),0) / tr.t, 1) te,
+      least(greatest(coalesce(num_or_null(tr.data->>'commissioned'),0) + coalesce(lt.co,0),0) / tr.t, 1) co,
+      least(greatest(coalesce(num_or_null(tr.data->>'handedOver'),0) + coalesce(lt.ho,0),0) / tr.t, 1) ho,
+      least(greatest(coalesce(num_or_null(tr.data->>'billMat'),0) + coalesce(lt.bm,0),0) / tr.t, 1) bm,
+      (trim(coalesce(tr.data->>'drawing','')) ~* '(approved|^na$)')::int dr,
+      (trim(coalesce(tr.data->>'tds','')) ~* '(approved|^na$)')::int ta
+      from tr left join lt on lt.item_id = tr.id)
+  select coalesce(jsonb_agg(jsonb_build_object('id', p.id, 'n', coalesce(x.n,0), 'all', (select count(*) from items where project_id = p.id),
+      'dr', case when adm or can_see(p.id,'status') then coalesce(x.dr,0) end, 'ta', case when adm or can_see(p.id,'status') then coalesce(x.ta,0) end,
+      'd', case when adm or can_see(p.id,'delivery') then coalesce(x.d,0) end, 'i', case when adm or can_see(p.id,'install') then coalesce(x.i,0) end,
+      't', case when adm or can_see(p.id,'testing') then coalesce(x.te,0) end, 'c', case when adm or can_see(p.id,'commission') then coalesce(x.co,0) end,
+      'h', case when adm or can_see(p.id,'handover') then coalesce(x.ho,0) end, 'b', case when adm or can_see(p.id,'billing') then coalesce(x.bm,0) end)), '[]'::jsonb)
+    into res
+    from p left join (select project_id, count(*) n, avg(d) d, avg(i) i, avg(te) te, avg(co) co, avg(ho) ho, avg(bm) bm, avg(dr) dr, avg(ta) ta from f group by project_id) x on x.project_id = p.id;
+  return res;
+end $$;
+
+-- ---------- in-app alerts ----------
+alter table public.profiles add column if not exists alerts_seen_at timestamptz;
+drop function if exists public.pending_digest();
+
+create or replace function public.my_alerts() returns jsonb
+language plpgsql stable security definer set search_path = public as $$
+declare uid uuid := auth.uid(); adm boolean := is_admin(); seen timestamptz;
+begin
+  if uid is null then return null; end if;
+  select alerts_seen_at into seen from profiles where id = uid;
+  return jsonb_build_object(
+    'seen_at', seen,
+    -- admins: requests waiting for approval, per project
+    'pending', case when adm then coalesce((select jsonb_agg(x order by x->>'oldest') from (
+        select jsonb_build_object('id', p.id, 'name', p.name,
+          'n', (select count(*) from lots where project_id = p.id and status = 'pending' and not deleted)
+             + (select count(*) from changes where project_id = p.id and status = 'pending')
+             + (select count(*) from documents where project_id = p.id and status = 'pending' and not deleted),
+          'oldest', (select min(t) from (select min(created_at) t from lots where project_id = p.id and status = 'pending' and not deleted
+                     union all select min(created_at) from changes where project_id = p.id and status = 'pending'
+                     union all select min(created_at) from documents where project_id = p.id and status = 'pending' and not deleted) z),
+          'people', (select coalesce(jsonb_agg(distinct n), '[]'::jsonb) from (select created_by_name n from lots where project_id = p.id and status = 'pending' and not deleted
+                     union select created_by_name from changes where project_id = p.id and status = 'pending'
+                     union select created_by_name from documents where project_id = p.id and status = 'pending' and not deleted) w where n is not null)) x
+        from projects p where p.deleted_at is null) y where (x->>'n')::int > 0), '[]'::jsonb) else '[]'::jsonb end,
+    -- everyone: decisions on your own requests in the last 14 days
+    'decided', coalesce((select jsonb_agg(d order by d->>'at' desc) from (
+        select jsonb_build_object('project', r.project_id, 'pname', p.name, 'type', r.t, 'what', r.what, 'item', left(coalesce(i.data->>'desc',''),80), 'sr', coalesce(i.data->>'sr',''),
+                                  'status', r.status, 'by', r.decided_by_name, 'note', r.decision_note, 'at', r.decided_at, 'new', seen is null or r.decided_at > seen) d
+          from (select project_id, item_id, 'lot' t, case when kind = 'billing' then 'billing:' || bill else kind end what, status, decided_by_name, decision_note, decided_at from lots where created_by = uid and not direct and not deleted and status in ('approved','rejected','removed')
+                union all select project_id, item_id, 'change', cat, status, decided_by_name, decision_note, decided_at from changes where created_by = uid and not direct and status in ('approved','rejected')
+                union all select project_id, null, 'doc', sec, status, decided_by_name, decision_note, decided_at from documents where created_by = uid and not direct and not deleted and status in ('approved','rejected','removed')) r
+          join projects p on p.id = r.project_id and p.deleted_at is null
+          left join items i on i.id = r.item_id
+         where r.decided_at > now() - interval '14 days' and is_member(r.project_id)
+         order by r.decided_at desc limit 30) q), '[]'::jsonb));
+end $$;
+
+create or replace function public.mark_alerts_seen() returns void
+language sql security definer set search_path = public as $$
+  update profiles set alerts_seen_at = now() where id = auth.uid() $$;
 
 -- ---------- grants ----------
 revoke all on all tables in schema public from anon, authenticated;

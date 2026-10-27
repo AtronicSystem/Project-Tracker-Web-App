@@ -178,14 +178,31 @@ async function loadPD(pid,force){
   const d=await rpc('project_data',{pid});d._at=Date.now();d._merged=merge(d);S.pd[pid]=d;return d;
 }
 async function refresh(force=true){
-  try{await loadProjects();if(S.pid&&S.view==='project')await loadPD(S.pid,force);
-    if(S.view==='overview')await Promise.all(S.projects.filter(p=>!p.deleted_at&&!isDone(p)).map(p=>loadPD(p.id,force).catch(()=>null)));
-    if(S.view==='projects')await Promise.all(S.projects.filter(p=>!p.deleted_at).map(p=>loadPD(p.id,false).catch(()=>null)));
+  try{await loadProjects();await loadAlerts();if(S.pid&&S.view==='project')await loadPD(S.pid,force);
+    if(S.view==='overview'||S.view==='projects'){const a=await rpc('project_summaries');S.sums=Object.fromEntries((a||[]).map(x=>[x.id,x]))}
     if(S.view==='project'&&S.ptab==='access'&&isAdmin())S.members=await rpc('list_members',{pid:S.pid});
     if(S.view==='admins'&&isAdmin())S.admins=await rpc('list_admins');
   }catch(e){toast(errMsg(e),6000)}
   render();
 }
+/* ---------- in-app alerts ---------- */
+const BELL='<svg viewBox="0 0 24 24" width="19" height="19" aria-hidden="true"><path fill="currentColor" d="M12 22a2.5 2.5 0 0 0 2.45-2h-4.9A2.5 2.5 0 0 0 12 22Zm7-6V11a7 7 0 0 0-5.5-6.84V3.5a1.5 1.5 0 0 0-3 0v.66A7 7 0 0 0 5 11v5l-2 2v1h18v-1l-2-2Z"/></svg>';
+const agoT=t=>{const m=Math.max(0,(Date.now()-new Date(t).getTime())/6e4);return m<60?Math.max(1,Math.round(m))+' min':m<1440?Math.round(m/60)+' h':Math.round(m/1440)+' d'};
+function alertWhat(d){if(d.type==='lot'){const [k,b]=String(d.what).split(':');return k==='billing'?billLabel(b)+' billing':(CATMAP[k]||{l:k}).l}
+  if(d.type==='change')return d.what==='data'?'Item data change':'Status change';return 'Document: '+((DOCMAP[d.what]||{l:d.what}).l.replace(/s$/,''))}
+const alertCounts=()=>{const a=S.alerts||{};const p=(a.pending||[]).reduce((x,y)=>x+y.n,0);const d=(a.decided||[]).filter(x=>x.new).length;return{p,d,all:p+d}};
+async function loadAlerts(){let a;try{a=await rpc('my_alerts')}catch(e){return}if(!a)return;
+  const before=S.alerts?alertCounts():null;S.alerts=a;const now=alertCounts();
+  if(!before){if(now.p||now.d)setTimeout(()=>toast([now.p&&`${now.p} update request${now.p>1?'s':''} waiting for your approval`,now.d&&`${now.d} of your request${now.d>1?'s were':' was'} decided`].filter(Boolean).join(' · ')+' — see 🔔',7000),400)}
+  else{if(now.p>before.p)toast(`🔔 New update request${now.p-before.p>1?'s':''} waiting for approval (${now.p} in total)`,7000);
+       else if(now.d>before.d){const nd=(a.decided||[]).find(x=>x.new);toast(`🔔 Your ${alertWhat(nd).toLowerCase()} request was ${nd.status==='approved'?'approved':'rejected'}${nd.by?' by '+nd.by:''}`,7000)}}
+  document.title=(now.all?`(${now.all}) `:'')+'Atronic Project Tracker'}
+function bellHTML(){const c=alertCounts();const a=S.alerts||{pending:[],decided:[]};const adm=isAdmin();
+  const pend=(a.pending||[]).map(p=>`<button class="arow" data-act="alertGo" data-id="${esc(p.id)}" data-t="pending"><span class="acount">${p.n}</span><span><strong>${esc(p.name)}</strong><span class="asub">from ${esc((p.people||[]).join(', ')||'team')} · oldest waiting ${agoT(p.oldest)}</span></span></button>`).join('');
+  const dec=(a.decided||[]).map(d=>`<button class="arow ${d.new||d._wasNew?'anew':''}" data-act="alertGo" data-id="${esc(d.project)}" data-t="done"><span class="aic ${d.status==='approved'?'ok':'bad'}">${d.status==='approved'?'✓':'✕'}</span><span><strong>${esc(alertWhat(d))}</strong> ${d.status==='approved'?'approved':d.status==='removed'?'removed':'rejected'}${d.by?' by '+esc(d.by):''}<span class="asub">${esc(d.pname)}${d.item?' · '+esc((d.sr?d.sr+' · ':'')+d.item):''}${d.note?' · “'+esc(d.note)+'”':''} · ${agoT(d.at)} ago</span></span></button>`).join('');
+  return `<div class="bellw"><button class="bell ${S.bellOpen?'on':''}" data-act="bell" aria-label="Alerts${c.all?': '+c.all+' new':''}" aria-expanded="${!!S.bellOpen}">${BELL}${c.all?`<span class="bbadge">${c.all>99?'99+':c.all}</span>`:''}</button>
+  ${S.bellOpen?`<div class="bdrop" role="dialog" aria-label="Alerts">${adm?`<div class="ahd">Waiting for your approval${c.p?` (${c.p})`:''}</div>${pend||'<div class="aempty">Nothing waiting. 👍</div>'}`:''}
+    ${adm&&!dec?'':`<div class="ahd">${adm?'Your own requests':'Your update requests'}</div>${dec||'<div class="aempty">No decisions on your requests in the last 14 days. You’ll see here when an admin approves or rejects something you sent.</div>'}`}</div>`:''}</div>`}
 async function after(promise,okMsg){try{const r=await promise;if(okMsg)toast(okMsg);await refresh(true);return r}catch(e){toast(errMsg(e),6000);throw e}}
 async function purgeExpired(){try{const ids=await rpc('expired_projects');for(const pid of ids||[]){const paths=await rpc('purge_project',{pid});if(paths&&paths.length)await sb.storage.from(BUCKET).remove(paths)}if((ids||[]).length)refresh()}catch(e){}}
 
@@ -194,7 +211,7 @@ async function initAuth(){
   if(!sb){S.auth='config';render();return}
   sb.auth.onAuthStateChange((ev,session)=>{
     if(ev==='PASSWORD_RECOVERY'){S.session=session;S.auth='reset';render();return}
-    if(ev==='SIGNED_OUT'){S.session=null;S.me=null;S.auth='signin';S.pd={};S.projects=[];render();return}
+    if(ev==='SIGNED_OUT'){S.session=null;S.me=null;S.alerts=null;S.bellOpen=false;S.sel=new Set();document.title='Atronic Project Tracker';S.auth='signin';S.pd={};S.projects=[];render();return}
     if(session&&S.auth!=='reset'&&(!S.session||S.session.user.id!==session.user.id)){S.session=session;startApp()}
   });
   const {data}=await sb.auth.getSession();
@@ -249,7 +266,7 @@ function doRender(){
 }
 function header(){const n=S.me.name||S.me.email;const ini=n.replace(/@.*/,'').split(/[\s._-]+/).map(w=>w[0]).slice(0,2).join('').toUpperCase();
   return `<header class="top"><div class="brand"><span class="logo-chip"><img class="logo" src="atronic-wordmark.png" alt="Atronic"></span><span class="bdiv" aria-hidden="true"></span><div><div class="b1">Project Tracker</div><div class="b2">ELV & IT installation progress</div></div></div>
-  <button class="refresh" data-act="refresh" title="Reload data">↻ Refresh</button>
+  ${bellHTML()}<button class="refresh" data-act="refresh" title="Reload data">↻ Refresh</button>
   <div class="umenu"><button class="who" data-act="umenu" aria-haspopup="true"><span class="ini">${esc(ini)}</span><div style="text-align:left"><div class="wn">${esc(n)}</div><div class="role ${isAdmin()?'r-admin':'r-site'}">${isAdmin()?'Admin':'Team member'}</div></div></button>
     <div class="udrop" id="udrop"><button data-act="editName">Change my name</button><button data-act="changePw">Change password</button><button data-act="signOut">Sign out</button></div></div></header>`}
 function nav(){const tabs=[['overview','Overview'],['projects','Projects'],...(isAdmin()?[['admins','Admins']]:[])];
@@ -269,11 +286,11 @@ function vOverview(){
   const list=live.filter(p=>!isDone(p));const doneN=live.length-list.length;
   const link=`<button class="lnk" data-act="view" data-v="projects">Projects</button>`;
   if(!list.length)return `<h1 style="font-size:22px">Overview</h1><div class="panel muted" style="margin-top:14px">No ongoing projects. ${doneN} completed project${doneN===1?' is':'s are'} listed under ${link}.</div>`;
-  const all=[];let complete=true;
-  const rows=list.map(p=>{const pd=S.pd[p.id];const items=pd?pd._merged.items:null;if(items)all.push(...items);else complete=false;const st=items?stats(items):null;
+  const sums=S.sums||{};const complete=list.every(p=>sums[p.id]);
+  const rows=list.map(p=>{const st=sums[p.id]||null;
     return `<tr><td><button class="lnk" style="font-size:14px;color:var(--ink)" data-act="openProject" data-id="${esc(p.id)}">${esc(p.name)}</button><div class="muted" style="font-size:12px">${st?st.n+' items':'<span class="spin"></span>'}</div></td>
     ${METRICS.map(([k,,c,cat])=>mcell(st&&st.n&&pCanView(p,cat)?st[k]:null,c)).join('')}</tr>`}).join('');
-  const tot=isAdmin()&&complete&&list.length>1?stats(all):null;
+  let tot=null;if(isAdmin()&&complete&&list.length>1){const ss=list.map(p=>sums[p.id]);const n=ss.reduce((a,x)=>a+x.n,0);tot={n};METRICS.forEach(([k])=>{tot[k]=n?ss.reduce((a,x)=>a+(x[k]||0)*x.n,0)/n:0})}
   return `<h1 style="font-size:22px">Overview</h1><p class="muted" style="margin:4px 0 14px">Progress of ongoing projects. Click a project to open its tracker.${doneN?` Completed projects (${doneN}) are under ${link}.`:''}</p>
   <div class="tbl-wrap"><table class="ovt"><thead><tr><th>Project</th>${METRICS.map(([,l,c])=>`<th><span class="key" style="background:${c}"></span> ${l}</th>`).join('')}</tr></thead>
   <tbody>${rows}</tbody>${tot?`<tfoot><tr><td><strong>All projects</strong><div class="muted" style="font-size:12px">${tot.n} items</div></td>${METRICS.map(([k,,c])=>mcell(tot[k],c)).join('')}</tr></tfoot>`:''}</table></div>
@@ -284,7 +301,7 @@ function vOverview(){
 function vProjects(){
   const admin=isAdmin();const live=S.projects.filter(p=>!p.deleted_at).sort((a,b)=>(isDone(a)-isDone(b))||String(a.name).localeCompare(String(b.name)));
   const cards=live.map((p,ix,arr)=>{const hdr=isDone(p)&&(ix===0||!isDone(arr[ix-1]))?`<h2 class="pgh">Completed (${arr.filter(isDone).length})</h2>`:(ix===0?`<h2 class="pgh">Ongoing (${arr.filter(x=>!isDone(x)).length})</h2>`:'');
-    const pd=S.pd[p.id];const s=pd?stats(pd._merged.items):null;const cv=c=>pCanView(p,c);
+    const s=(S.sums||{})[p.id]||null;const cv=c=>pCanView(p,c)&&s&&s[{delivery:'d',install:'i'}[c]]!=null;
     return hdr+`<div class="pcard ${isDone(p)?'done':''}"><div><h3>${esc(p.name)}</h3><div class="muted" style="font-size:13px">${esc([p.client,p.location].filter(Boolean).join(', '))||'&nbsp;'}</div></div>
     ${s?`${cv('delivery')&&cv('install')?twin(s.d,s.i):''}<div class="stat-line"><span>${s.n} items</span>${cv('delivery')?`<span>${pct(s.d)} delivered</span>`:''}${cv('install')?`<span>${pct(s.i)} installed</span>`:''}</div>`:'<div class="stat-line"><span class="spin"></span></div>'}
     <div class="stat-line"><span>${p.status==='Completed'?`<span class="st ok">Completed</span>${p.completed_at?' '+fmtDate(p.completed_at):''}`:esc(p.status||'Active')}</span><span>${p.target?'Target '+fmtDate(p.target):''}</span></div>
@@ -366,6 +383,38 @@ function colsModal(){const v=new Set(visibleCols().map(c=>c.k));
 function kpis(items){const x=stats(items);if(!x.n)return '';
   const k=[['Drawing approved',x.dr,'#7A4FC9','status'],['TDS approved',x.ta,'#0E8C8C','status'],['Delivered',x.d,'var(--accent)','delivery'],['Installed',x.i,'var(--ok)','install'],['Tested',x.t,'#D9731A','testing'],['Commissioned',x.c,'#0E7490','commission'],['Handed over',x.h,'#B0417A','handover'],['Supply billed',x.b,'#7A4FC9','billing']].filter(r=>vSee(r[3]));
   return `<div class="kpis"><div class="kpi"><div class="kv">${x.n}</div><div class="kl">Line items${S.sec?' · '+esc(S.sec):''}</div></div>${k.map(([l,v,c])=>`<div class="kpi"><div class="kv">${pct(v)}</div><div class="kl">${l}</div><div class="pb"><i style="width:${(v*100).toFixed(1)}%;background:${c}"></i></div></div>`).join('')}</div>`}
+const canBulk=()=>isAdmin()||KINDS.some(k=>['edit','request'].includes(myLevel(k)))||['edit','request'].includes(myLevel('status'));
+function bulkTargets(){return KINDS.filter(k=>isAdmin()||['edit','request'].includes(myLevel(k))).flatMap(k=>k==='billing'?BILLS.map(b=>({v:'billing:'+b.k,l:b.l+' billing'})):[{v:k,l:CATMAP[k].l}])}
+function bulkLotModal(){const opts=bulkTargets();if(!opts.length){toast('You can’t record progress on this project.');return}
+  modal(`<h2>Record progress for ${S.sel.size} item${S.sel.size>1?'s':''}</h2>
+  <form class="form" id="blform" onsubmit="return false"><label class="wide">What<select name="what">${opts.map(o=>`<option value="${o.v}">${esc(o.l)}</option>`).join('')}</select></label>
+  <label class="wide row" style="gap:8px;flex-wrap:nowrap;font-weight:500"><input type="radio" name="mode" value="rem" checked style="width:auto"> Full remaining quantity of each item</label>
+  <label class="wide row" style="gap:8px;flex-wrap:nowrap;font-weight:500"><input type="radio" name="mode" value="each" style="width:auto"> Same quantity for each item: <input name="qty" type="number" step="any" min="0" style="width:110px"></label>
+  <label>Date<input name="date" type="date" value="${today()}"></label><label>Reference<input name="ref" placeholder="Challan, area, report or bill no."></label><label class="wide">Note<input name="note"></label></form>
+  <p class="muted" style="font-size:12.5px">Items that are already complete for this step, and heading rows, are skipped. Entries follow your access: “Needs approval” entries go to Pending update requests.</p>
+  <div class="row" style="justify-content:flex-end;margin-top:14px"><button class="btn" data-act="closeModal">Cancel</button><button class="btn pri" data-act="doBulkLot">Record</button></div>`)}
+async function doBulkLot(btn){const v=Object.fromEntries(new FormData($('#blform')));const [kind,bill]=String(v.what).split(':');const each=num(v.qty);
+  if(v.mode==='each'&&!(each>0)){toast('Enter the quantity for each item.');return}
+  const its=S.M.items.filter(it=>S.sel.has(it.id));let ok=0,pend=0,skip=0,err=0,last='';btn.disabled=true;
+  for(const [ix,it] of its.entries()){btn.textContent=`Saving ${ix+1} of ${its.length}…`;if(!trackable(it)){skip++;continue}
+    const tot=kind==='billing'?(it[(BILLMAP[bill]||BILLMAP.material).tot]||0):(it[KIND[kind].tot]||0);const q=v.mode==='rem'?target(it)-tot:each;if(!(q>0)){skip++;continue}
+    try{const r=await rpc('add_lot',{pid:S.pid,iid:it.id,kind,qty:q,d:coerce('deliveryDate',v.date)||today(),ref:String(v.ref||'').trim(),note:String(v.note||'').trim(),bill:bill||'material'});r.status==='pending'?pend++:ok++}catch(e){err++;last=errMsg(e)}}
+  closeModal();S.sel=new Set();toast([ok&&`${ok} recorded`,pend&&`${pend} sent for approval`,skip&&`${skip} skipped (already complete)`,err&&`${err} failed: ${last}`].filter(Boolean).join(' · ')||'Nothing to record.',8000);await refresh(true)}
+function bulkStatusModal(){const sel=(k,opts)=>`<select name="${k}"><option value="__keep">(no change)</option>${opts.map(o=>`<option value="${esc(o)}">${esc(o||'(clear)')}</option>`).join('')}</select>`;
+  modal(`<h2>Update status for ${S.sel.size} item${S.sel.size>1?'s':''}</h2><p class="muted" style="margin:0 0 12px">Only the fields you change are updated; everything else stays as it is.</p>
+  <form class="form" id="bsform" onsubmit="return false"><label>Drawing approval${sel('drawing',APPROVAL)}</label><label>Drawing status date<input type="date" name="drawingDate"></label>
+  <label>TDS approval${sel('tds',APPROVAL)}</label><label>TDS status date<input type="date" name="tdsDate"></label>
+  <label>Delivery status${sel('expStatus',FMAP.expStatus.opts)}</label><label>Pending reason<input name="pendingReason" placeholder="(no change)"></label>
+  ${isAdmin()?'':'<label class="wide">Note for the admin<input name="_note"></label>'}</form>
+  <div class="row" style="justify-content:flex-end;margin-top:14px"><button class="btn" data-act="closeModal">Cancel</button><button class="btn pri" data-act="doBulkStatus">Update</button></div>`)}
+async function doBulkStatus(btn){const v=Object.fromEntries(new FormData($('#bsform')));const ch={};
+  ['drawing','tds','expStatus'].forEach(k=>{if(v[k]!=='__keep')ch[k]=v[k]});['drawingDate','tdsDate'].forEach(k=>{if(v[k])ch[k]=coerce(k,v[k])});if(String(v.pendingReason||'').trim())ch.pendingReason=String(v.pendingReason).trim();
+  if(!Object.keys(ch).length){toast('Choose at least one field to change.');return}
+  const its=S.M.items.filter(it=>S.sel.has(it.id));let ok=0,pend=0,err=0,last='';btn.disabled=true;const rates=PD().rates||{};
+  for(const [ix,it] of its.entries()){btn.textContent=`Saving ${ix+1} of ${its.length}…`;
+    try{if(isAdmin()){const r0=rates[it.id]||{};await rpc('save_item',{pid:S.pid,iid:it.id,d:ch,w:r0.w??null,p:r0.p??null});ok++}
+      else{const r=await rpc('submit_changes',{pid:S.pid,iid:it.id,cat:'status',ch,note:String(v._note||'').trim()});r.status==='pending'?pend++:ok++}}catch(e){err++;last=errMsg(e)}}
+  closeModal();S.sel=new Set();toast([ok&&`${ok} updated`,pend&&`${pend} sent for approval`,err&&`${err} failed: ${last}`].filter(Boolean).join(' · '),8000);await refresh(true)}
 function vTracker(){
   if(isAdmin()&&!S.members&&!S._memLoading){S._memLoading=true;rpc('list_members',{pid:S.pid}).then(m=>{S.members=m;S._memLoading=false;render()},()=>{S._memLoading=false})}
   if(S.asEmail&&!previewing()&&S.members)S.asEmail='';
@@ -373,12 +422,13 @@ function vTracker(){
   const items=S.M.items;const secs=sections(items);const q=S.q.trim().toLowerCase();const pend=new Set(pendingAll().map(r=>r.item_id));const cols=visibleCols();
   const statuses=['Awaiting PO','Ordered','Part delivered','Delivered','Part installed','Installed','Tested','Commissioned','Handed over'];
   const match=it=>(!S.sec||it.section===S.sec)&&(!S.st||status(it)===S.st)&&(!S.flag||issues(it).length)&&(!q||[it.sr,it.desc,vSee('data')?[it.make,it.model,posOf(it).map(p=>p.vendor+' '+p.no).join(' '),it.contractor].join(' '):'',vSee('status')?it.remarks:''].join(' ').toLowerCase().includes(q));
+  const bulk=!previewing()&&canBulk();S.sel=S.sel||new Set();const shownIds=[];
   let rows='',shown=0;
   secs.forEach(s=>{const list=s.list.filter(match);if(!list.length)return;const x=stats(s.list);
     const bits=[x.n+' items',vSee('delivery')?pct(x.d)+' delivered':'',vSee('install')?pct(x.i)+' installed':'',vSee('testing')?pct(x.t)+' tested':'',vSee('commission')?pct(x.c)+' commissioned':'',vSee('handover')?pct(x.h)+' handed over':'',vSee('billing')?pct(x.b)+' billed':''].filter(Boolean).join(' · ');
     rows+=`<tr class="grp" style="--c:${s.color}"><td colspan="${cols.length}"><div class="gin"><span class="chip" style="--c:${s.color}">${esc(s.name)}</span><span class="gs">${bits}</span>${vSee('delivery')&&vSee('install')?twin(x.d,x.i,'gtw'):''}</div></td></tr>`;
-    list.forEach(it=>{shown++;const marks=`${issues(it).length?'<span class="dot f" title="Needs attention: '+esc(issues(it).join('; '))+'"></span>':''}${pend.has(it.id)?'<span class="dot r" title="Pending update request"></span>':''}`;
-      rows+=`<tr class="it ${trackable(it)?'':'hd'}" data-act="open" data-id="${esc(it.id)}" tabindex="0">${cols.map(c=>`<td class="${[c.n?'num':'',c.cls||'',c.w?'pcell':''].join(' ')}">${c.r(it)}${c.k==='sr'?marks:''}</td>`).join('')}</tr>`})});
+    list.forEach(it=>{shown++;shownIds.push(it.id);const marks=`${issues(it).length?'<span class="dot f" title="Needs attention: '+esc(issues(it).join('; '))+'"></span>':''}${pend.has(it.id)?'<span class="dot r" title="Pending update request"></span>':''}`;
+      rows+=`<tr class="it ${trackable(it)?'':'hd'}" data-act="open" data-id="${esc(it.id)}" tabindex="0">${cols.map(c=>`<td class="${[c.n?'num':'',c.cls||'',c.w?'pcell':'',FOCUS[c.k]?'fc':''].join(' ')}" ${FOCUS[c.k]?`data-act="cell" data-col="${c.k}" data-id="${esc(it.id)}" title="${esc(FOCUS[c.k].t)}"`:''}>${c.k==='sr'&&bulk?`<span class="selbox" data-act="sel" data-id="${esc(it.id)}"><input type="checkbox" tabindex="-1" aria-label="Select item" ${S.sel.has(it.id)?'checked':''}></span>`:''}${c.r(it)}${c.k==='sr'?marks:''}</td>`).join('')}</tr>`})});
   const mem=isAdmin()?(S.members||[]):[];
   return `${isAdmin()&&mem.length?`<div class="row pvrow"><label for="asWho" class="muted" style="font-size:13px">View as</label><select id="asWho" data-change="asWho"><option value="">Admin — everything</option>${mem.map(m=>`<option value="${esc(m.email)}" ${S.asEmail===m.email?'selected':''}>${esc(m.name||m.email)}${m.name?' ('+esc(m.email)+')':''}</option>`).join('')}</select>
     ${pv?`<span class="pvnote">Previewing what <strong>${esc(pv.name||pv.email)}</strong> sees. Columns and totals for areas set to “No access” are hidden.</span>`:''}</div>`:''}
@@ -387,9 +437,10 @@ function vTracker(){
     <select id="fsec" data-change="sec" aria-label="ELV system"><option value="">All ELV systems</option>${secs.map(s=>`<option ${S.sec===s.name?'selected':''}>${esc(s.name)}</option>`).join('')}</select>
     ${vSee('delivery')&&vSee('install')?`<select id="fst" data-change="st" aria-label="Status"><option value="">Any status</option>${statuses.map(s=>`<option ${S.st===s?'selected':''}>${s}</option>`).join('')}</select>`:''}
     <label class="row" style="gap:6px"><input type="checkbox" id="fflag" data-change="flag" ${S.flag?'checked':''}> Needs attention</label>
-    <span style="margin-left:auto" class="row"><button class="btn" data-act="cols">Columns</button>${isAdmin()?'<button class="btn pri" data-act="newItem">Add line item</button>':''}<button class="btn" data-act="export">Export Excel</button></span></div>
-  <div class="tbl-wrap tscroll"><table class="ttbl"><thead><tr>${cols.map(c=>`<th class="${[c.n?'num':'',c.cls||''].join(' ')}">${esc(c.l)}</th>`).join('')}</tr></thead>
+    <span style="margin-left:auto" class="row"><button class="btn" data-act="cols">Columns</button><button class="btn" data-act="report">Progress report</button>${isAdmin()?'<button class="btn" data-act="updFromXl">Update from Excel</button><button class="btn pri" data-act="newItem">Add line item</button>':''}<button class="btn" data-act="export">Export Excel</button></span></div>
+  <div class="tbl-wrap tscroll"><table class="ttbl"><thead><tr>${cols.map(c=>`<th class="${[c.n?'num':'',c.cls||''].join(' ')}">${c.k==='sr'&&bulk?`<span class="selbox" data-act="selAll" title="Select all shown"><input type="checkbox" tabindex="-1" aria-label="Select all shown" ${shownIds.length&&shownIds.every(i=>S.sel.has(i))?'checked':''}></span>`:''}${esc(c.l)}</th>`).join('')}</tr></thead>
   <tbody>${rows||`<tr><td colspan="${cols.length}" class="muted" style="padding:24px">${items.length?'No items match these filters.':'No line items yet.'+(isAdmin()?' Use “Add line item”.':'')}</td></tr>`}</tbody></table></div>
+  ${bulk&&S.sel.size?`<div class="bulkbar" role="region" aria-label="Bulk update"><strong>${S.sel.size} selected</strong><button class="btn pri" data-act="bulkLot">Record progress</button>${isAdmin()||['edit','request'].includes(myLevel('status'))?'<button class="btn" data-act="bulkStatus">Update status</button>':''}<button class="lnk" data-act="selClear">Clear selection</button></div>`:''}
   <p class="muted" style="font-size:12.5px">${shown} of ${items.length} rows · Qty shows the new WO quantity (BOQ below when different) · Dates show the latest lot · <span class="dot f"></span> needs attention · <span class="dot r"></span> pending update request</p>`;
 }
 
@@ -501,13 +552,22 @@ function vAdmins(){const a=S.admins;
   <form class="row" style="margin-top:14px" data-submit="addAdmin"><input id="newAdmin" name="email" type="email" required placeholder="Email of new admin" style="flex:1;min-width:200px;padding:8px 10px;border:1px solid var(--line);border-radius:6px;background:var(--panel)"><button class="btn pri">Add admin</button></form></div>`}
 
 /* ---------- item drawer ---------- */
-function openItem(id){if(id!=null&&!S.M.items.find(x=>x.id===id)){toast('That item no longer exists.');return}
+// clicking a tracker cell opens only the fields behind that column
+const FOCUS={system:{t:'ELV system',f:['section']},makeModel:{t:'Make & model',f:['make','model']},qty:{t:'Quantity',f:['qty','unit','woQty']},
+  drawing:{t:'Drawing approval',f:['drawing','drawingDate']},tds:{t:'TDS approval',f:['tds','tdsDate']},po:{t:'Purchase orders',po:1},
+  delivery:{t:'Delivery',k:['delivery'],f:['expStatus'],o:['delivered','deliveryDate']},balance:{t:'Delivery',k:['delivery'],f:['expStatus'],o:['delivered','deliveryDate']},
+  install:{t:'Installation',k:['install'],o:['installed','installDate']},testing:{t:'Testing',k:['testing'],o:['tested','testDate']},
+  commission:{t:'Commissioning',k:['commission'],o:['commissioned','commissionDate']},handover:{t:'Handing over',k:['handover'],o:['handedOver','handoverDate']},
+  ...Object.fromEntries(BILLS.map(b=>['bill_'+b.k,{t:b.l+' billing',k:['billing'],bill:b.k,o:[b.open,b.openDate]}])),
+  contractor:{t:'WO contractor',f:['contractor']},reasons:{t:'Pending / delay reason',f:['pendingReason','delayReason']},remarks:{t:'Remarks',f:['remarks']},
+  rateW:{t:'Rates',rates:1},woTotal:{t:'Rates',rates:1}};
+function openItem(id,focus){S.drawerFocus=id!=null&&focus&&FOCUS[focus]?FOCUS[focus]:null;if(id!=null&&!S.M.items.find(x=>x.id===id)){toast('That item no longer exists.');return}
   {const it0=id==null?{}:S.M.items.find(x=>x.id===id);S._poDraft=posOf(it0).map(p=>({vendor:p.vendor||'',no:p.no||'',date:p.date||'',qty:p.qty??'',note:p.note||''}))}
   S.drawerId=id==null?null:id;$('#drawer').innerHTML=drawerHTML();$('#drawer').classList.add('open');$('#drawer').setAttribute('aria-hidden','false');$('#scrim').classList.add('open');setTimeout(()=>{const f=$('#drawer .xbtn');f&&f.focus()},50)}
 function refreshDrawer(){const dr=$('#drawer');if(!dr.classList.contains('open'))return;if(S.drawerId&&!S.M.items.find(x=>x.id===S.drawerId)){closeDrawer();return}
   const vals={};dr.querySelectorAll('input,select,textarea').forEach(el=>{const k=el.id||el.name;if(k&&el.type!=='file')vals[k]=el.value});const sc=$('.db',dr)?$('.db',dr).scrollTop:0;
   dr.innerHTML=drawerHTML();dr.querySelectorAll('input,select,textarea').forEach(el=>{const k=el.id||el.name;if(k&&k in vals)el.value=vals[k]});if($('.db',dr))$('.db',dr).scrollTop=sc}
-function closeDrawer(){$('#drawer').classList.remove('open');$('#drawer').setAttribute('aria-hidden','true');if(!$('#modal').classList.contains('open'))$('#scrim').classList.remove('open');S.drawerId=undefined}
+function closeDrawer(){S.drawerFocus=null;$('#drawer').classList.remove('open');$('#drawer').setAttribute('aria-hidden','true');if(!$('#modal').classList.contains('open'))$('#scrim').classList.remove('open');S.drawerId=undefined}
 function lvlBadge(c){const l=myLevel(c);if(l==='admin')return '';return `<span class="lvl ${l}">${l==='edit'?'You can edit':l==='request'?'Needs approval':'Only see'}</span>`}
 function drawerHTML(){
   const id=S.drawerId,isNew=id==null,admin=isAdmin();const it=isNew?{section:S.sec||(sections(S.M.items)[0]||{}).name||'General'}:S.M.items.find(x=>x.id===id);
@@ -523,6 +583,31 @@ function drawerHTML(){
   const r=(PD().rates||{})[id]||{};const anyField=admin||['data','status'].some(c=>['edit','request'].includes(myLevel(c)));
   const t=isNew?null:target(it);const st=isNew?null:status(it);const unit=esc(it.unit||'');
   const pendCh=isNew?[]:(PD().changes||[]).filter(c=>c.item_id===id&&c.status==='pending');
+  const F=isNew?null:S.drawerFocus;
+  if(F){
+    const fs=(F.f||[]).map(k=>FMAP[k]).filter(f=>f&&showField(f)&&(admin||canView(f.cat)||f.cat==='data'));
+    const os=admin?(F.o||[]).map(k=>FMAP[k]).filter(Boolean):[];
+    const ks=(F.k||[]).filter(canView);
+    const poEd=F.po&&(admin||canView('data'));const poCan=poEd&&(admin||['edit','request'].includes(myLevel('data')));
+    const editable=fs.some(canField)||os.length||(F.rates&&admin)||poCan;
+    S._poShown=!!poEd;
+    const cats=[...new Set([...fs.map(f=>f.cat),...(poEd?['data']:[]),...ks])].filter(c=>c&&c!=='opening');
+    const relCh=pendCh.filter(x=>Object.keys(x.changes).some(k=>(F.f||[]).includes(k)||(F.po&&['pos','vendor','poDate'].includes(k))));
+    const body=`${ks.map(k=>lotSection(it,k,F.bill)).join('')}
+      ${fs.length||os.length||poEd||(F.rates&&admin)?`<form id="dform" class="form" onsubmit="return false" style="margin-top:${ks.length?14:0}px">
+        ${fs.length?`<div class="sech" style="grid-column:1/-1"><h3>${esc(F.t)}</h3>${cats.map(lvlBadge).join('')}</div>${fs.map(field).join('')}`:''}
+        ${poEd?poEditor(it,poCan):''}
+        ${os.length?`<div class="sech" style="grid-column:1/-1"><h3>Opening quantity (from Excel)</h3></div>${os.map(field).join('')}`:''}
+        ${F.rates&&admin?`<div class="sech" style="grid-column:1/-1"><h3>Rates</h3><span class="muted" style="font-size:12px">Admins only</span></div><label>Unit rate (WO)<input type="number" step="any" name="rateW" value="${esc(r.w??'')}"></label><label>Unit rate (purchase)<input type="number" step="any" name="rateP" value="${esc(r.p??'')}"></label>`:''}
+        ${!admin&&editable?`<label class="wide">Note for the admin (sent with changes that need approval)<textarea name="_note"></textarea></label>`:''}
+        <datalist id="secl">${sections(S.M.items).map(s=>`<option value="${esc(s.name)}">`).join('')}</datalist></form>`:''}
+      ${!ks.length&&!fs.length&&!poEd&&!(F.rates&&admin)?'<p class="muted">You don’t have access to this.</p>':''}
+      ${relCh.length?`<div class="sub"><h3>Pending update requests</h3>${relCh.map(x=>`<div class="muted" style="font-size:13px;margin-bottom:6px">${esc(x.created_by_name||'')}, ${fmtTime(x.created_at)}: ${Object.entries(x.changes).filter(([k])=>!['vendor','poDate'].includes(k)||!x.changes.pos).map(([k,v])=>`${esc(FMAP[k]?FMAP[k].l:k)} → ${esc(fmtVal(k,v))||'(cleared)'}`).join('; ')}</div>`).join('')}</div>`:''}`;
+    return `<div class="dh"><div><h2>${esc(F.t)}</h2><div class="muted" style="font-size:12.5px"><span class="chip" style="--c:${secColor(it.section)}">${esc(it.section)}</span>${it.sr?' · Sr. '+esc(it.sr):''}${t?` · Target ${fmtN(t)} ${unit}`:''}</div><div style="margin-top:6px;font-size:13.5px">${esc(String(it.desc||'').slice(0,160))}${String(it.desc||'').length>160?'…':''}</div></div><button class="xbtn" data-act="closeDrawer" aria-label="Close">×</button></div>
+    <div class="db">${body}</div>
+    <div class="df"><button class="lnk" data-act="allDetails" style="margin-right:auto;font-size:13px">Show all details of this item</button><button class="btn" data-act="closeDrawer">Close</button>${editable&&(fs.length||os.length||poEd||F.rates)?`<button class="btn pri" data-act="${admin?'saveItem':'saveFields'}">Save changes</button>`:''}</div>`;
+  }
+  S._poShown=true;
   return `<div class="dh"><div><h2>${isNew?'New line item':esc(it.sr?'Item '+it.sr:'Line item')}</h2><div class="muted" style="font-size:12.5px">${isNew?'':`<span class="chip" style="--c:${secColor(it.section)}">${esc(it.section)}</span>`}${st?` · <span class="st ${ST_CLASS[st]}">${st}</span>`:''}</div>${isNew?'':`<div style="margin-top:6px;font-size:13.5px">${esc(String(it.desc||'').slice(0,160))}${String(it.desc||'').length>160?'…':''}</div>`}</div><button class="xbtn" data-act="closeDrawer" aria-label="Close">×</button></div>
   <div class="db">
     ${isNew?'':`<div class="sumstrip"><div><div class="v">${fmtN(t)||'—'}</div><div class="l">Target ${unit}</div></div>
@@ -541,19 +626,27 @@ function drawerHTML(){
   <div class="df">${admin?`${isNew?'':'<button class="btn danger" data-act="delItem" style="margin-right:auto">Delete item</button>'}<button class="btn" data-act="closeDrawer">Close</button><button class="btn pri" data-act="saveItem">${isNew?'Add item':'Save changes'}</button>`
     :anyField?`<button class="btn" data-act="closeDrawer">Close</button><button class="btn pri" data-act="saveFields">Save changes</button>`:`<button class="btn" data-act="closeDrawer">Close</button>`}</div>`;
 }
-function lotSection(it,kind){
+const canEd=r=>['pending','approved'].includes(r.status)&&(isAdmin()||(r.mine&&((r.status==='pending'&&['edit','request'].includes(myLevel(r.kind)))||(r.status==='approved'&&r.direct&&myLevel(r.kind)==='edit'))));
+function editLotModal(r){const it=S.M.items.find(x=>x.id===r.item_id)||{};const refL=(KIND[r.kind]||{}).ref||'Reference';
+  modal(`<h2>Edit ${esc(r.kind==='billing'?billLabel(r.bill)+' billing':CATMAP[r.kind].l.toLowerCase())} entry</h2><p class="muted" style="margin:0 0 12px">${esc(itemLabel(it))}</p>
+  <form class="form" id="elform" onsubmit="return false">${r.kind==='billing'?`<label>Billing stage<select name="bill">${BILLS.map(b=>`<option value="${b.k}" ${b.k===(r.bill||'material')?'selected':''}>${b.l}</option>`).join('')}</select></label>`:''}
+  <label>Qty (${esc(it.unit||'units')})<input name="qty" type="number" step="any" min="0" value="${esc(r.qty)}"></label><label>Date<input name="date" type="date" value="${esc(r.date||'')}"></label>
+  <label>${esc(refL)}<input name="ref" value="${esc(r.ref||'')}"></label><label class="wide">Note<input name="note" value="${esc(r.note||'')}"></label></form>
+  ${r.status==='pending'?'<p class="muted" style="font-size:12.5px">This entry is waiting for approval; it stays pending after the edit.</p>':''}
+  <div class="row" style="justify-content:flex-end;margin-top:14px"><button class="btn" data-act="closeModal">Cancel</button><button class="btn pri" data-act="doEditLot" data-r="${esc(r.id)}">Save</button></div>`)}
+function lotSection(it,kind,onlyBill){
   const lv=myLevel(kind);const unit=esc(it.unit||'');
-  const recs=(it._lots||[]).filter(l=>l.kind===kind).sort((a,b)=>String(b.date).localeCompare(String(a.date))||String(b.created_at).localeCompare(String(a.created_at)));
+  const recs=(it._lots||[]).filter(l=>l.kind===kind&&(!onlyBill||(l.bill||'material')===onlyBill)).sort((a,b)=>String(b.date).localeCompare(String(a.date))||String(b.created_at).localeCompare(String(a.created_at)));
   const K=KIND[kind];const opening=K.open?num(it[K.open]):null;const refL=K.ref;
   const rows=[];
   if(opening)rows.push(`<tr><td>${esc(fmtDate(it[K.openDate]))||'—'}</td><td class="num">${fmtN(opening)}</td><td colspan="2" class="muted">Opening quantity from Excel</td><td></td></tr>`);
-  if(kind==='billing')BILLS.forEach(b=>{if(num(it[b.open]))rows.push(`<tr><td>${esc(fmtDate(it[b.openDate]))||'—'}</td><td class="num">${fmtN(it[b.open])}<div class="muted" style="font-size:11.5px">${b.l}</div></td><td colspan="2" class="muted">Opening quantity from Excel</td><td></td></tr>`)});
+  if(kind==='billing')BILLS.filter(b=>!onlyBill||b.k===onlyBill).forEach(b=>{if(num(it[b.open]))rows.push(`<tr><td>${esc(fmtDate(it[b.openDate]))||'—'}</td><td class="num">${fmtN(it[b.open])}<div class="muted" style="font-size:11.5px">${b.l}</div></td><td colspan="2" class="muted">Opening quantity from Excel</td><td></td></tr>`)});
   recs.forEach(r=>{const off=['rejected','removed'].includes(r.status);const canDel=(isAdmin()&&r.status!=='removed')||(r.mine&&(r.status==='pending'||(r.status==='approved'&&r.direct))&&['edit','request'].includes(lv));
-    rows.push(`<tr class="${off?'off':''}"><td>${esc(fmtDate(r.date))||'—'}</td><td class="num">${fmtN(r.qty)}${kind==='billing'?`<div class="muted" style="font-size:11.5px">${esc(billLabel(r.bill))}</div>`:''}</td><td>${esc(r.ref)}${r.note?`<div class="muted" style="font-size:12px">${esc(r.note)}</div>`:''}</td><td>${esc(r.created_by_name||'')}<div>${stateChip(r)}</div></td><td>${canDel?`<button class="lnk bad" data-act="delLot" data-r="${esc(r.id)}">${isAdmin()&&!r.mine&&!r.direct?'Remove':'Delete'}</button>`:''}</td></tr>`)});
-  const tot=K.tot?fmtN(it[K.tot]):BILLS.filter(b=>it[b.tot]).map(b=>`${b.l} ${fmtN(it[b.tot])}`).join(' · ')||'0';
-  return `<div class="sech"><h3>${esc(CATMAP[kind].l)} lots</h3><span class="muted" style="font-size:12.5px">Total ${tot} ${unit}</span>${lvlBadge(kind)}</div>
+    rows.push(`<tr class="${off?'off':''}"><td>${esc(fmtDate(r.date))||'—'}</td><td class="num">${fmtN(r.qty)}${kind==='billing'?`<div class="muted" style="font-size:11.5px">${esc(billLabel(r.bill))}</div>`:''}</td><td>${esc(r.ref)}${r.note?`<div class="muted" style="font-size:12px">${esc(r.note)}</div>`:''}</td><td>${esc(r.created_by_name||'')}<div>${stateChip(r)}</div></td><td style="white-space:nowrap">${canEd(r)?`<button class="lnk" data-act="editLot" data-r="${esc(r.id)}">Edit</button> `:''}${canDel?`<button class="lnk bad" data-act="delLot" data-r="${esc(r.id)}">${isAdmin()&&!r.mine&&!r.direct?'Remove':'Delete'}</button>`:''}</td></tr>`)});
+  const tot=K.tot?fmtN(it[K.tot]):onlyBill?fmtN(it[BILLMAP[onlyBill].tot]):BILLS.filter(b=>it[b.tot]).map(b=>`${b.l} ${fmtN(it[b.tot])}`).join(' · ')||'0';
+  return `<div class="sech"><h3>${esc(onlyBill?BILLMAP[onlyBill].l+' billing':CATMAP[kind].l)} lots</h3><span class="muted" style="font-size:12.5px">Total ${tot} ${unit}</span>${lvlBadge(kind)}</div>
   ${rows.length?`<div style="overflow-x:auto"><table class="lots"><thead><tr><th>Date</th><th class="num">Qty</th><th>${esc(refL)}</th><th>By</th><th></th></tr></thead><tbody>${rows.join('')}</tbody></table></div>`:`<p class="muted" style="font-size:13px;margin:0">No ${esc(CATMAP[kind].l.toLowerCase())} recorded yet.</p>`}
-  ${['admin','edit','request'].includes(lv)?`<div class="lotadd">${kind==='billing'?`<label>Billing stage<select id="lb_${kind}">${BILLS.map(b=>`<option value="${b.k}" ${b.k==='material'?'selected':''}>${b.l}</option>`).join('')}</select></label>`:''}
+  ${['admin','edit','request'].includes(lv)?`<div class="lotadd">${kind==='billing'?`${onlyBill?`<input type="hidden" id="lb_${kind}" value="${onlyBill}">`:`<label>Billing stage<select id="lb_${kind}">${BILLS.map(b=>`<option value="${b.k}" ${b.k==='material'?'selected':''}>${b.l}</option>`).join('')}</select></label>`}`:''}
     <label>Qty (${unit||'units'})<input id="lq_${kind}" type="number" step="any" min="0" inputmode="decimal"></label><label>Date<input id="ld_${kind}" type="date" value="${today()}"></label>
     <label>${esc(refL)}<input id="lr_${kind}"></label><label>Note<input id="ln_${kind}"></label>
     <button class="btn ${lv==='request'?'':'pri'}" data-act="addLot" data-k="${kind}">${lv==='request'?'Send for approval':'Add lot'}</button></div>`:''}`;
@@ -586,7 +679,7 @@ async function saveFields(btn){
   const it=S.M.items.find(x=>x.id===S.drawerId);if(!it)return;const v=readForm();let sent=0,saved=0;btn.disabled=true;
   try{for(const c of ['data','status']){if(!['edit','request'].includes(myLevel(c)))continue;const ch={};
       CAT_FIELDS[c].forEach(k=>{if(!(k in v))return;const nv=coerce(k,v[k]);if(!same(it[k],nv))ch[k]=nv});
-      if(c==='data'){const ps=cleanPos();if(JSON.stringify(ps)!==JSON.stringify(cleanPosOf(it))){ch.pos=ps;Object.assign(ch,posDerived(ps))}}
+      if(c==='data'&&S._poShown){const ps=cleanPos();if(JSON.stringify(ps)!==JSON.stringify(cleanPosOf(it))){ch.pos=ps;Object.assign(ch,posDerived(ps))}}
       if(!Object.keys(ch).length)continue;
       const r=await rpc('submit_changes',{pid:S.pid,iid:it.id,cat:c,ch,note:String(v._note||'').trim()});r.status==='pending'?sent++:saved++}
     if(!sent&&!saved){toast('Nothing has changed yet.');btn.disabled=false;return}
@@ -594,9 +687,10 @@ async function saveFields(btn){
 }
 async function saveItem(btn){
   const v=readForm();const id=S.drawerId;const old=id?(PD().items||[]).find(x=>x.id===id)||{}:{};
-  const d={...old};delete d.id;delete d.ord;delete d.updatedAt;delete d.updatedBy;FIELDS.filter(f=>!f.legacy).forEach(f=>d[f.k]=coerce(f.k,v[f.k]));{const ps=cleanPos();d.pos=ps;Object.assign(d,posDerived(ps))}
+  const d={...old};delete d.id;delete d.ord;delete d.updatedAt;delete d.updatedBy;FIELDS.filter(f=>!f.legacy&&(!id||f.k in v)).forEach(f=>d[f.k]=coerce(f.k,v[f.k]));if(S._poShown){const ps=cleanPos();d.pos=ps;Object.assign(d,posDerived(ps))}
   if(!d.desc){toast('Add an item description first.');return}d.section=d.section||'General';d.header=!(target(d)>0);
-  btn.disabled=true;try{await rpc('save_item',{pid:S.pid,iid:id||null,d,w:num(v.rateW),p:num(v.rateP)});closeDrawer();toast(id?'Changes saved.':'Item added.');await refresh(true)}catch(e){btn.disabled=false;toast(errMsg(e),6000)}
+  let send=d;if(id){send={header:d.header};Object.keys(d).forEach(k=>{if(k==='header')return;const a=old[k],b=d[k];if(typeof b==='object'&&b!==null?JSON.stringify(a)!==JSON.stringify(b):!same(a,b))send[k]=b})}
+  btn.disabled=true;try{const r0=(PD().rates||{})[id]||{};await rpc('save_item',{pid:S.pid,iid:id||null,d:send,w:'rateW' in v?num(v.rateW):(r0.w??null),p:'rateP' in v?num(v.rateP):(r0.p??null)});closeDrawer();toast(id?'Changes saved.':'Item added.');await refresh(true)}catch(e){btn.disabled=false;toast(errMsg(e),6000)}
 }
 
 /* ---------- modals ---------- */
@@ -612,7 +706,7 @@ const readP=()=>{const o={};new FormData($('#pform')).forEach((v,k)=>o[k]=String
 function newProjectChooser(){const others=S.projects.filter(p=>!p.deleted_at);
   modal(`<h2>New project</h2><p class="muted" style="margin:0 0 14px">How do you want to start?</p><div class="npc">
     <button class="npo" data-act="import"><strong>1. Import BOQ</strong><span>Pick an Excel BOQ or tracker file. Line items, ELV systems, quantities, units, makes and rates are read in.</span></button>
-    <div class="npo ${others.length?'':'dis'}"><strong>2. Use another project as template</strong><span>Copies its line items, makes, vendors and rates. Progress, dates and approvals start empty.</span>
+    <div class="npo ${others.length?'':'dis'}"><strong>2. Use another project as template</strong><span>Copies its line items, makes, models and rates. POs, progress, dates and approvals start empty.</span>
       ${others.length?`<div class="row" style="margin-top:8px;flex-wrap:nowrap"><label class="sr" for="tplSrc">Project to copy</label><select id="tplSrc" style="flex:1;min-width:0;padding:7px 9px;border:1px solid var(--line);border-radius:6px;background:var(--panel)">${others.map(p=>`<option value="${esc(p.id)}">${esc(p.name)}</option>`).join('')}</select><button class="btn" data-act="fromTemplate">Continue</button></div>`:'<em class="muted" style="font-size:12.5px">No projects yet to copy from.</em>'}</div>
     <button class="npo" data-act="blankProject"><strong>3. Blank project</strong><span>Start empty and add line items one by one.</span></button></div>
   <div class="row" style="justify-content:space-between;margin-top:16px"><button class="lnk" data-act="template">Download blank BOQ template</button><button class="btn" data-act="closeModal">Cancel</button></div>`)}
@@ -700,14 +794,101 @@ function downloadTemplate(){const H=[...XH,'Unit rate WO','Unit rate Purchase'];
     'PO Vendor':'Vendor A; Vendor B','PO No.':'PO-101; PO-102','PO Qty':'60; 40','PO Date':'2026-02-01; 2026-02-15','Delivery Status':'Pending','WO (Contractor)':'Contractor name','Unit rate WO':1000,'Unit rate Purchase':800};
   const ex=H.map(h=>ex0[h]??'');saveBook([['Tracker',[H,ex],xcols(H)]],'Project_Tracker_Template.xlsx')}
 
+/* ---------- progress report ---------- */
+const lotDay=l=>l.date||String(l.created_at||'').slice(0,10);
+const RSTEPS=[['delivery','Delivered'],['install','Installed'],['testing','Tested'],['commission','Commissioned'],['handover','Handed over'],['billing','Supply billed']];
+function qtyAsOf(it,kind,day){const K=kind==='billing'?BILLMAP.material:KIND[kind];let q=num(it[K.open])||0;
+  (it._lots||[]).forEach(l=>{if(l.status!=='approved'||l.kind!==kind)return;if(kind==='billing'&&(l.bill||'material')!=='material')return;if(day&&lotDay(l)>day)return;q+=num(l.qty)||0});return q}
+function pctAsOf(items,kind,day){const tr=items.filter(trackable);if(!tr.length)return 0;return tr.reduce((a,it)=>a+Math.min(Math.max(0,qtyAsOf(it,kind,day))/target(it),1),0)/tr.length}
+const dayBefore=d=>{const x=new Date(d+'T00:00:00Z');x.setUTCDate(x.getUTCDate()-1);return x.toISOString().slice(0,10)};
+function reportData(from,to){const items=S.M.items;const prev=dayBefore(from);const steps=RSTEPS.filter(([k])=>canView(k));
+  const rowFor=(name,list)=>({name,n:list.filter(trackable).length,cells:steps.map(([k])=>({now:pctAsOf(list,k,to),was:pctAsOf(list,k,prev)}))});
+  const secs=sections(items).map(s=>rowFor(s.name,s.list));const total=rowFor('All systems',items);
+  const work=[];items.forEach(it=>(it._lots||[]).forEach(l=>{if(l.status==='approved'&&canView(l.kind)){const d=lotDay(l);if(d>=from&&d<=to)work.push({d,it,l})}}));work.sort((a,b)=>a.d.localeCompare(b.d));
+  const appr=[];if(canView('status'))items.forEach(it=>{[['drawing','Drawing'],['tds','TDS']].forEach(([k,l])=>{const d=it[k+'Date'];if(d&&d>=from&&d<=to&&it[k])appr.push({d,it,what:l,st:it[k]})})});appr.sort((a,b)=>a.d.localeCompare(b.d));
+  const st=stats(items);return{from,to,steps,secs,total,work,appr,pending:pendingAll().length,attention:items.filter(it=>issues(it).length).length,dr:canView('status')?st.dr:null,ta:canView('status')?st.ta:null}}
+const lotWhat=l=>l.kind==='billing'?billLabel(l.bill)+' billing':CATMAP[l.kind].l;
+function reportModal(){const to=today();const from=dayBefore(dayBefore(dayBefore(dayBefore(dayBefore(dayBefore(to))))));
+  modal(`<h2>Progress report</h2><p class="muted" style="margin:0 0 12px">Progress at the end of the period, what changed during it, and the work recorded.</p>
+  <form class="form" id="rpform" onsubmit="return false"><label>From<input type="date" name="from" value="${from}"></label><label>To<input type="date" name="to" value="${to}"></label></form>
+  <div class="row" style="gap:6px;margin-top:8px"><button class="lnk" data-act="rpRange" data-d="7">Last 7 days</button><span class="muted">·</span><button class="lnk" data-act="rpRange" data-d="14">Last 14 days</button><span class="muted">·</span><button class="lnk" data-act="rpRange" data-d="30">Last 30 days</button></div>
+  <div class="row" style="justify-content:flex-end;margin-top:16px"><button class="btn" data-act="closeModal">Cancel</button><button class="btn" data-act="rpExcel">Download Excel</button><button class="btn pri" data-act="rpPrint">Open printable report</button></div>`)}
+function rpRange(){const v=Object.fromEntries(new FormData($('#rpform')));if(!v.from||!v.to||v.from>v.to){toast('Choose a valid period.');return null}return v}
+function reportHTML(R){const p=cur();const pc=v=>Math.round(v*100)+'%';const dl=c=>{const x=Math.round((c.now-c.was)*100);return x>0?`<span class="up">+${x}</span>`:'<span class="mu">—</span>'};
+  const row=r=>`<tr><td>${esc(r.name)}</td><td class="c">${r.n}</td>${r.cells.map(c=>`<td class="c"><b>${pc(c.now)}</b> ${dl(c)}</td>`).join('')}</tr>`;
+  return `<!doctype html><html><head><meta charset="utf-8"><title>Progress report – ${esc(p.name)}</title><style>
+  body{font:13px/1.45 Arial,Helvetica,sans-serif;color:#1C2536;margin:0;padding:28px 34px}h1{font-size:20px;margin:0}h2{font-size:15px;margin:26px 0 8px;color:#24425E;border-bottom:2px solid #24425E;padding-bottom:4px}
+  .bar{height:6px;background:linear-gradient(105deg,#24425E 0 64%,#fff 64% 65.2%,#F0423B 65.2%);margin:-28px -34px 20px}.hd{display:flex;align-items:center;gap:18px}.hd img{height:54px}.mu{color:#6b7787}
+  table{border-collapse:collapse;width:100%}th,td{border-bottom:1px solid #d6dce4;padding:6px 7px;text-align:left;vertical-align:top}th{background:#f2f5f8;font-size:12px}td.c,th.c{text-align:center}.up{color:#2F8F5B;font-weight:700;font-size:11.5px}
+  tfoot td{font-weight:700;background:#f7f9fb}.k{display:flex;gap:10px;flex-wrap:wrap;margin-top:6px}.k div{border:1px solid #d6dce4;border-top:3px solid #24425E;border-radius:6px;padding:8px 12px;min-width:110px}.k b{font-size:18px;color:#24425E;display:block}
+  .tb{position:fixed;top:12px;right:16px}.tb button{font:inherit;padding:8px 14px;border-radius:6px;border:0;background:#24425E;color:#fff;cursor:pointer}@media print{.tb{display:none}body{padding:0 6mm}.bar{margin:0 -6mm 14px}}
+  </style></head><body><div class="bar"></div><div class="tb"><button onclick="print()">Print / Save as PDF</button></div>
+  <div class="hd"><img src="${location.origin}${location.pathname.replace(/[^/]*$/,'')}atronic-logo.png" alt="Atronic"><div><h1>Progress report — ${esc(p.name)}</h1><div class="mu">${esc([p.client,p.location].filter(Boolean).join(', '))}</div>
+  <div>Period: <b>${fmtDate(R.from)} – ${fmtDate(R.to)}</b> · Generated ${fmtTime(new Date().toISOString())} by ${esc(S.me.name||S.me.email)}</div></div></div>
+  <div class="k">${R.dr!=null?`<div><b>${pc(R.dr)}</b>Drawing approved</div><div><b>${pc(R.ta)}</b>TDS approved</div>`:''}${R.total.cells.map((c,i)=>`<div><b>${pc(c.now)}</b>${R.steps[i][1]}${c.now>c.was?` <span class="up">+${Math.round((c.now-c.was)*100)}</span>`:''}</div>`).join('')}<div><b>${R.work.length}</b>Entries this period</div><div><b>${R.pending}</b>Pending requests</div></div>
+  <h2>Progress by ELV system</h2><table><thead><tr><th>ELV system</th><th class="c">Items</th>${R.steps.map(s=>`<th class="c">${s[1]}</th>`).join('')}</tr></thead><tbody>${R.secs.map(row).join('')}</tbody><tfoot>${row(R.total)}</tfoot></table>
+  <p class="mu" style="font-size:11.5px">% at the end of the period; green figure = percentage points gained during the period. Quantity done against the new WO quantity, averaged across line items.</p>
+  <h2>Work recorded in this period (${R.work.length})</h2>${R.work.length?`<table><thead><tr><th>Date</th><th>ELV system</th><th>Item</th><th>Step</th><th class="c">Qty</th><th>Reference</th><th>By</th></tr></thead><tbody>${R.work.map(w=>`<tr><td>${fmtDate(w.d)}</td><td>${esc(w.it.section)}</td><td>${esc(itemLabel(w.it))}</td><td>${esc(lotWhat(w.l))}</td><td class="c">${fmtN(w.l.qty)} ${esc(w.it.unit||'')}</td><td>${esc(w.l.ref||'')}</td><td>${esc(w.l.created_by_name||'')}</td></tr>`).join('')}</tbody></table>`:'<p class="mu">No work recorded in this period.</p>'}
+  ${R.dr!=null?`<h2>Drawing &amp; TDS status changes in this period (${R.appr.length})</h2>${R.appr.length?`<table><thead><tr><th>Date</th><th>ELV system</th><th>Item</th><th>Document</th><th>Status</th></tr></thead><tbody>${R.appr.map(a=>`<tr><td>${fmtDate(a.d)}</td><td>${esc(a.it.section)}</td><td>${esc(itemLabel(a.it))}</td><td>${a.what}</td><td>${esc(a.st)}</td></tr>`).join('')}</tbody></table>`:'<p class="mu">No drawing or TDS status dates fall in this period.</p>'}`:''}
+  <p class="mu" style="margin-top:22px;font-size:11.5px">${R.attention} line item${R.attention===1?' needs':'s need'} attention (no PO, delays, or drawing/TDS not approved). Atronic Systems Pvt. Ltd · www.atronic.co.in</p></body></html>`}
+function reportExcel(R){const p=cur();const pc=v=>Math.round(v*1000)/10;
+  const sum=[['ELV system','Items',...R.steps.flatMap(s=>[s[1]+' % (end)',s[1]+' % (start)'])],...[...R.secs,R.total].map(r=>[r.name,r.n,...r.cells.flatMap(c=>[pc(c.now),pc(c.was)])])];
+  const work=[['Date','ELV system','Sr.','Item','Step','Qty','Unit','Reference','Note','By'],...R.work.map(w=>[w.d,w.it.section,w.it.sr,w.it.desc,lotWhat(w.l),num(w.l.qty),w.it.unit,w.l.ref,w.l.note,w.l.created_by_name])];
+  const sheets=[['Summary',sum,[{wch:24},{wch:7}]],['Work recorded',work,[{wch:11},{wch:16},{wch:6},{wch:60},{wch:18},{wch:8},{wch:7},{wch:18},{wch:24},{wch:16}]]];
+  if(R.dr!=null)sheets.push(['Drawing & TDS',[['Date','ELV system','Sr.','Item','Document','Status'],...R.appr.map(a=>[a.d,a.it.section,a.it.sr,a.it.desc,a.what,a.st])],[{wch:11},{wch:16},{wch:6},{wch:60},{wch:10},{wch:12}]]);
+  saveBook(sheets,`Progress_Report_${String(p.name).replace(/[^\w-]+/g,'_')}_${R.from}_to_${R.to}.xlsx`)}
+
+/* ---------- update an existing project from Excel ---------- */
+const UPD_KEYS=FIELDS.filter(f=>['data','status'].includes(f.cat)&&!f.legacy).map(f=>f.k);
+const OPEN_KEYS=FIELDS.filter(f=>f.cat==='opening').map(f=>f.k);
+// opening (Excel) fields → the lot kind they belong to; skipped on update when the item already has lots of that kind (exported totals include lots)
+const OPEN_KIND={...Object.fromEntries(KINDS.filter(k=>KIND[k].open).flatMap(k=>[[KIND[k].open,k],[KIND[k].openDate,k]])),...Object.fromEntries(BILLS.flatMap(b=>[[b.open,'billing:'+b.k],[b.openDate,'billing:'+b.k]]))};
+const normT=x=>String(x??'').toLowerCase().replace(/\s+/g,' ').trim();
+async function updateFromFile(file){
+  if(!window.XLSX){toast('The Excel reader didn’t load. Check your connection and reload.');return}
+  try{const wb=XLSX.read(await file.arrayBuffer(),{type:'array'});const rows=XLSX.utils.sheet_to_json(wb.Sheets[wb.SheetNames[0]],{header:1,defval:'',raw:true});
+    const{items:fi,rates:fr}=parseTracker(rows);if(!fi.length)throw new Error('No line items found in that file.');
+    const ex=(PD().items||[]);const rates=PD().rates||{};const used=new Set();const idx=(m,k,e)=>{if(!k)return;(m.get(k)||m.set(k,[]).get(k)).push(e)};
+    const bD=new Map(),bS=new Map(),bO=new Map();ex.forEach(e=>{idx(bD,normT(e.section)+'|'+normT(e.desc),e);if(normT(e.sr))idx(bS,normT(e.section)+'|'+normT(e.sr),e);idx(bO,normT(e.desc),e)});
+    const pick=(m,k)=>{const c=(m.get(k)||[]).filter(e=>!used.has(e.id));return c.length===1||(m===bD&&c.length)?c[0]:null};
+    const plan={upd:[],add:[],samples:[],fields:0,openFields:0};
+    fi.forEach((f,i)=>{const e=pick(bD,normT(f.section)+'|'+normT(f.desc))||(normT(f.sr)?pick(bS,normT(f.section)+'|'+normT(f.sr)):null)||pick(bO,normT(f.desc));
+      const fr0=fr[i]||{};
+      if(!e){plan.add.push({f,r:fr0});return}used.add(e.id);
+      const ch={},och={};UPD_KEYS.forEach(k=>{const v=f[k];if(v==null||v==='')return;if(!same(e[k],v))ch[k]=v});
+      if(Array.isArray(f.pos)&&f.pos.length&&!Array.isArray(e.pos)&&!e.vendor){ch.pos=f.pos;Object.assign(ch,posDerived(f.pos))}
+      const lotKinds=new Set(((PD().lots||[]).filter(l=>l.item_id===e.id&&!['rejected','removed'].includes(l.status))).map(l=>l.kind==='billing'?'billing:'+(l.bill||'material'):l.kind));
+      OPEN_KEYS.forEach(k=>{const v=f[k];if(v==null||v==='')return;const kd=OPEN_KIND[k];if(kd&&lotKinds.has(kd))return;if(!same(e[k],v))och[k]=v});
+      const r0=rates[e.id]||{};const rch=(fr0.w&&fr0.w!==r0.w)||(fr0.p&&fr0.p!==r0.p);
+      if(Object.keys(ch).length||Object.keys(och).length||rch){plan.upd.push({e,ch,och,w:fr0.w||r0.w||null,p:fr0.p||r0.p||null,rch});plan.fields+=Object.keys(ch).length+(rch?1:0);plan.openFields+=Object.keys(och).length;
+        Object.keys(ch).filter(k=>!['vendor','poDate'].includes(k)).slice(0,3).forEach(k=>plan.samples.length<14&&plan.samples.push(`${itemLabel(e)} — ${FMAP[k]?FMAP[k].l:k}: ${fmtVal(k,e[k])||'—'} → ${fmtVal(k,ch[k])}`))}});
+    const untouched=ex.length-used.size;S._upd=plan;
+    modal(`<h2>Update “${esc(cur().name)}” from Excel</h2><p class="muted" style="margin:0 0 12px">${esc(file.name)} · ${fi.length} line items in the file</p>
+    <ul style="margin:0 0 12px;padding-left:18px;line-height:1.7"><li><strong>${plan.upd.filter(u=>Object.keys(u.ch).length||u.rch).length}</strong> existing items will be updated (${plan.fields} field change${plan.fields===1?'':'s'})</li>
+    <li><strong>${plan.add.length}</strong> new item${plan.add.length===1?'':'s'} will be added</li><li><strong>${untouched}</strong> item${untouched===1?'':'s'} in the project ${untouched===1?'is':'are'} not in the file and will be left as ${untouched===1?'it is':'they are'}</li></ul>
+    ${plan.samples.length?`<div class="panel" style="max-height:200px;overflow:auto;font-size:12.5px;padding:10px 12px">${plan.samples.map(x=>`<div>${esc(x)}</div>`).join('')}${plan.fields>plan.samples.length?'<div class="muted">…</div>':''}</div>`:''}
+    ${plan.openFields?`<label class="row" style="gap:8px;margin-top:12px;flex-wrap:nowrap"><input type="checkbox" id="updOpen" style="width:auto"> Also overwrite opening quantities and dates (delivered, installed, billed…) from the file — ${plan.openFields} value${plan.openFields===1?'':'s'}</label>`:''}
+    <p class="muted" style="font-size:12.5px">Blank cells in the file never clear existing values. Lots, documents and approvals are not changed.</p>
+    <div class="row" style="justify-content:flex-end;margin-top:14px"><button class="btn" data-act="closeModal">Cancel</button><button class="btn pri" data-act="doUpd">Apply changes</button></div>`);
+  }catch(e){toast(e.message||'Couldn’t read that file.',6000)}}
+async function doUpdate(btn){const plan=S._upd;if(!plan)return;const withOpen=!!($('#updOpen')||{}).checked;let up=0,add=0,err=0,last='';btn.disabled=true;
+  const jobs=[...plan.upd.map(u=>({u})),...plan.add.map(a=>({a}))];
+  for(const [ix,j] of jobs.entries()){btn.textContent=`Saving ${ix+1} of ${jobs.length}…`;
+    try{if(j.u){const d={...j.u.ch,...(withOpen?j.u.och:{})};if(!Object.keys(d).length&&!j.u.rch)continue;const m={...j.u.e,...d};d.header=!(target(m)>0);
+        await rpc('save_item',{pid:S.pid,iid:j.u.e.id,d,w:j.u.w,p:j.u.p});up++}
+      else{const f={...j.a.f};f.header=!(target(f)>0);await rpc('save_item',{pid:S.pid,iid:null,d:f,w:j.a.r.w||null,p:j.a.r.p||null});add++}}catch(e){err++;last=errMsg(e)}}
+  S._upd=null;closeModal();toast([`${up} updated`,`${add} added`,err&&`${err} failed: ${last}`].filter(Boolean).join(' · '),8000);await refresh(true)}
+
 /* ---------- navigation ---------- */
-async function goProject(pid,tab){if(pid!==S.pid)S.asEmail='';S.pid=pid;lsSet('pid',pid);S.view='project';S.ptab=tab||S.ptab;S.members=null;lsSet('view','project');lsSet('ptab',S.ptab);render();window.scrollTo(0,0);
+async function goProject(pid,tab){if(pid!==S.pid){S.asEmail='';S.sel=new Set()}S.pid=pid;lsSet('pid',pid);S.view='project';S.ptab=tab||S.ptab;S.members=null;lsSet('view','project');lsSet('ptab',S.ptab);render();window.scrollTo(0,0);
   try{await loadPD(pid,true);if(S.ptab==='access'&&isAdmin())S.members=await rpc('list_members',{pid})}catch(e){toast(errMsg(e),6000)}render()}
 
 /* ---------- actions ---------- */
 const ACT={
   authMode:t=>{S.auth=t.dataset.m;S.authMsg='';render()},
   refresh:()=>{toast('Refreshing…',1500);refresh(true)},
+  bell:async()=>{S.bellOpen=!S.bellOpen;const a=S.alerts||{};if(S.bellOpen&&(a.decided||[]).some(x=>x.new)){a.decided.forEach(x=>{if(x.new){x._wasNew=true;x.new=false}});rpc('mark_alerts_seen').catch(()=>{});document.title=(alertCounts().all?`(${alertCounts().all}) `:'')+'Atronic Project Tracker'}render()},
+  alertGo:t=>{S.bellOpen=false;S.reqTab=t.dataset.t==='done'?'done':'pending';goProject(t.dataset.id,'approvals')},
   umenu:()=>$('#udrop').classList.toggle('open'),
   signOut:async()=>{await sb.auth.signOut()},
   editName:()=>{modal(`<h2>Your name</h2><form class="form" id="nform" onsubmit="return false"><label class="wide">Name shown to others<input name="n" value="${esc(S.me.name||'')}"></label></form><div class="row" style="justify-content:flex-end;margin-top:14px"><button class="btn" data-act="closeModal">Cancel</button><button class="btn pri" data-act="doName">Save</button></div>`)},
@@ -719,13 +900,27 @@ const ACT={
   openProject:t=>goProject(t.dataset.id,'tracker'),
   open:t=>openItem(t.dataset.id),newItem:()=>openItem(null),
   poView:t=>{const it=S.M.items.find(x=>x.id===t.dataset.id);if(it)poModal(it)},
-  poOpenItem:t=>{closeModal();openItem(t.dataset.id)},
+  poOpenItem:t=>{closeModal();openItem(t.dataset.id,'po')},
+  cell:t=>openItem(t.dataset.id,t.dataset.col),
+  sel:t=>{const id=t.dataset.id;S.sel.has(id)?S.sel.delete(id):S.sel.add(id);render()},
+  selAll:()=>{const ids=[...document.querySelectorAll('#main .selbox[data-act=sel]')].map(e=>e.dataset.id);const all=ids.every(i=>S.sel.has(i));ids.forEach(i=>all?S.sel.delete(i):S.sel.add(i));render()},
+  selClear:()=>{S.sel=new Set();render()},
+  report:()=>reportModal(),
+  rpRange:t=>{const to=today();let f=to;for(let i=1;i<+t.dataset.d;i++)f=dayBefore(f);$('#rpform [name=from]').value=f;$('#rpform [name=to]').value=to},
+  rpPrint:()=>{const v=rpRange();if(!v)return;const url=URL.createObjectURL(new Blob([reportHTML(reportData(v.from,v.to))],{type:'text/html'}));const w=window.open(url,'_blank');if(!w){toast('Allow pop-ups for this site to open the report.');return}setTimeout(()=>URL.revokeObjectURL(url),60000);closeModal()},
+  rpExcel:()=>{const v=rpRange();if(!v)return;reportExcel(reportData(v.from,v.to));closeModal()},
+  updFromXl:()=>{$('#fileUpd').value='';$('#fileUpd').click()},doUpd:t=>doUpdate(t),
+  bulkLot:()=>bulkLotModal(),doBulkLot:t=>doBulkLot(t),bulkStatus:()=>bulkStatusModal(),doBulkStatus:t=>doBulkStatus(t),
+  allDetails:()=>{const id=S.drawerId;S.drawerFocus=null;refreshDrawer()},
   poAdd:()=>{(S._poDraft=S._poDraft||[]).push({vendor:'',no:'',date:today(),qty:'',note:''});refreshDrawer();setTimeout(()=>{const e=document.querySelector(`#drawer [data-po="${S._poDraft.length-1}"][data-f=vendor]`);e&&e.focus()},20)},
   poDel:t=>{S._poDraft.splice(+t.dataset.i,1);refreshDrawer()},
   closeDrawer:()=>{if($('#modal').classList.contains('open'))closeModal();else closeDrawer()},closeModal:()=>closeModal(),
   saveItem:t=>saveItem(t),saveFields:t=>saveFields(t),
   delItem:async()=>{const it=S.M.items.find(x=>x.id===S.drawerId);if(!it||!await askConfirm('Delete this line item and all its lots? This cannot be undone.','Delete item',true))return;closeDrawer();await after(rpc('delete_item',{iid:it.id}),'Item deleted.')},
   addLot:t=>addLot(t.dataset.k,t),
+  editLot:t=>{const r=(PD().lots||[]).find(x=>x.id===t.dataset.r);if(r)editLotModal(r)},
+  doEditLot:async t=>{const v=Object.fromEntries(new FormData($('#elform')));const qty=num(v.qty);if(!(qty>0)){toast('Enter a quantity above zero.');return}t.disabled=true;
+    try{await rpc('update_lot',{lid:t.dataset.r,qty,d:coerce('deliveryDate',v.date),ref:String(v.ref||'').trim(),note:String(v.note||'').trim(),bill:v.bill||null});closeModal();toast('Entry updated.');await refresh(true)}catch(e){t.disabled=false;toast(errMsg(e),6000)}},
   delLot:async t=>{if(!await askConfirm('Delete this lot? It stops counting toward the totals.','Delete lot',true))return;await after(rpc('delete_lot',{lid:t.dataset.r}),'Lot removed.')},
   decide:async t=>{t.disabled=true;const note=(($('#rn_'+CSS.escape(t.dataset.r))||{}).value||'').trim();
     try{const fp=await rpc('decide',{kind:t.dataset.k,rid:t.dataset.r,st:t.dataset.s,p_note:note});if(fp)await sb.storage.from(BUCKET).remove([fp]);toast(t.dataset.s==='approved'?'Approved.':'Rejected.');await refresh(true)}catch(e){t.disabled=false;toast(errMsg(e))}},
@@ -749,7 +944,7 @@ const ACT={
   removeAdmin:async t=>{if(!await askConfirm(`Remove ${t.dataset.e} as admin?`,'Remove admin',true))return;try{await rpc('remove_admin',{em:t.dataset.e});S.admins=await rpc('list_admins');render();toast('Admin removed.')}catch(e){toast(errMsg(e))}},
   newProject:()=>newProjectChooser(),
   blankProject:()=>projectForm({},'New blank project','Create project','doNewProject'),
-  fromTemplate:()=>{const v=($('#tplSrc')||{}).value;if(!v)return;const src=S.projects.find(p=>p.id===v);S._dupFrom=v;projectForm({name:src.name+' (copy)',client:src.client},'Start from “'+esc(src.name)+'”','Create project','doDup',`<p class="muted" style="margin:0">Copies every line item with its ELV system, make, model, vendor and rates. Progress, dates and approvals start empty.</p>`)},
+  fromTemplate:()=>{const v=($('#tplSrc')||{}).value;if(!v)return;const src=S.projects.find(p=>p.id===v);S._dupFrom=v;projectForm({name:src.name+' (copy)',client:src.client},'Start from “'+esc(src.name)+'”','Create project','doDup',`<p class="muted" style="margin:0">Copies every line item with its ELV system, make, model and rates. POs, progress, dates and approvals start empty.</p>`)},
   import:()=>{$('#fileIn').value='';$('#fileIn').click()},template:()=>downloadTemplate(),export:()=>exportXlsx(),
   doImport:async t=>{const m=readP();if(!m.name){toast('Give the project a name.');return}t.disabled=true;t.textContent='Creating…';
     try{const pid=await rpc('create_project',{meta:m,its:S._import.items,rates:S._import.rates});S._import=null;closeModal();toast('Project created.');await loadProjects();goProject(pid,'tracker')}catch(e){t.disabled=false;t.textContent='Create project';toast(errMsg(e),6000)}},
@@ -766,7 +961,7 @@ const ACT={
   purgeNow:async t=>{const p=S.projects.find(x=>x.id===t.dataset.id);if(!await askConfirm(`Permanently delete “${p.name}” now? This cannot be undone.`,'Delete permanently',true))return;
     try{const paths=await rpc('purge_project',{pid:p.id});if(paths&&paths.length)await sb.storage.from(BUCKET).remove(paths);toast('Project permanently deleted.');await refresh(true)}catch(e){toast(errMsg(e))}},
 };
-document.addEventListener('click',e=>{if(!e.target.closest('.umenu')){const d=$('#udrop');d&&d.classList.remove('open')}
+document.addEventListener('click',e=>{if(!e.target.closest('.umenu')){const d=$('#udrop');d&&d.classList.remove('open')}if(S.bellOpen&&!e.target.closest('.bellw')){S.bellOpen=false;render()}
   const t=e.target.closest('[data-act]');if(!t)return;const f=ACT[t.dataset.act];if(f){e.preventDefault();f(t,e)}});
 document.addEventListener('submit',e=>{const k=e.target.dataset.submit;if(!k)return;e.preventDefault();
   if(k==='addAdmin'){const em=String(new FormData(e.target).get('email')||'').trim();rpc('add_admin',{em}).then(async()=>{e.target.reset();S.admins=await rpc('list_admins');toast('Admin added.');render()}).catch(err=>toast(errMsg(err)));return}
@@ -777,9 +972,11 @@ document.addEventListener('change',async e=>{const k=e.target.dataset&&e.target.
   if(k==='proj')goProject(e.target.value);else if(k==='asWho'){S.asEmail=e.target.value;render()}else if(k==='sec'){S.sec=e.target.value;render()}else if(k==='st'){S.st=e.target.value;render()}else if(k==='flag'){S.flag=e.target.checked;render()}
   else if(k==='perm'){const m=(S.members||[]).find(x=>x.email===e.target.dataset.e);if(!m)return;const lv={...(m.levels||{}),[e.target.dataset.c]:e.target.value};e.target.disabled=true;
     try{await rpc('set_member',{pid:S.pid,em:m.email,lv});m.levels=lv;toast('Access updated.')}catch(err){toast(errMsg(err))}e.target.disabled=false}
-  else if(k==='importFile'&&e.target.files[0])importFile(e.target.files[0])});
+  else if(k==='importFile'&&e.target.files[0])importFile(e.target.files[0]);
+  else if(k==='updateFile'&&e.target.files[0])updateFromFile(e.target.files[0])});
 document.addEventListener('input',e=>{if(e.target.dataset&&e.target.dataset.po!=null&&S._poDraft){const p=S._poDraft[+e.target.dataset.po];if(p)p[e.target.dataset.f]=e.target.value;return}const k=e.target.dataset&&e.target.dataset.input;if(k==='docq'){S.docQ=e.target.value;render()}else if(k==='q'){S.q=e.target.value;render()}});
 window.addEventListener('focus',()=>{if(S.auth==='app'&&Date.now()-(S._lastFocus||0)>60000){S._lastFocus=Date.now();refresh(true)}});
+setInterval(()=>{if(S.auth==='app'&&document.visibilityState==='visible')loadAlerts().then(()=>{const b=$('.bellw');if(b&&!S.bellOpen)b.outerHTML=bellHTML()})},60000);
 setInterval(()=>{if(S.auth==='app'&&document.visibilityState==='visible'&&!$('#drawer').classList.contains('open')&&!$('#modal').classList.contains('open'))refresh(true)},120000);
 
 initAuth();
