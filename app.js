@@ -360,7 +360,6 @@ const TCOLS=[
   {k:'po',cat:'data',l:'PO',r:it=>{if(!trackable(it)&&!posOf(it).length)return '';const p=poInfo(it);
     return `<button class="st ${p.n?'ok':'warn'} pobtn" data-act="poView" data-id="${esc(it.id)}" title="Show purchase orders">${p.st}${p.n>1?' · '+p.n:''}</button>${p.part?`<div class="mk">${fmtN(p.q)} of ${fmtN(p.t)}</div>`:''}`}},
   {k:'delivery',cat:'delivery',l:'Delivered',w:1,r:it=>prog(it,it.dTot,it.dDate,'delivery')},
-  {k:'balance',cat:'delivery',l:'To deliver',n:1,off:1,r:it=>{if(!trackable(it))return '';const b=target(it)-it.dTot;return `<span class="${b<0?'neg':''}">${fmtN(b)}</span>`}},
   {k:'install',cat:'install',l:'Installed',w:1,r:it=>prog(it,it.iTot,it.iDate,'install',it.iStart&&it.iStart!==it.iDate?`from ${esc(fmtDate(it.iStart))} · `:'')},
   {k:'testing',cat:'testing',l:'Tested',w:1,r:it=>prog(it,it.tTot,it.tDate,'testing')},
   {k:'commission',cat:'commission',l:'Commissioned',w:1,r:it=>prog(it,it.cTot,it.cDate,'commission')},
@@ -555,7 +554,7 @@ function vAdmins(){const a=S.admins;
 // clicking a tracker cell opens only the fields behind that column
 const FOCUS={system:{t:'ELV system',f:['section']},makeModel:{t:'Make & model',f:['make','model']},qty:{t:'Quantity',f:['qty','unit','woQty']},
   drawing:{t:'Drawing approval',f:['drawing','drawingDate']},tds:{t:'TDS approval',f:['tds','tdsDate']},po:{t:'Purchase orders',po:1},
-  delivery:{t:'Delivery',k:['delivery'],f:['expStatus'],o:['delivered','deliveryDate']},balance:{t:'Delivery',k:['delivery'],f:['expStatus'],o:['delivered','deliveryDate']},
+  delivery:{t:'Delivery',k:['delivery'],f:['expStatus'],o:['delivered','deliveryDate']},
   install:{t:'Installation',k:['install'],o:['installed','installDate']},testing:{t:'Testing',k:['testing'],o:['tested','testDate']},
   commission:{t:'Commissioning',k:['commission'],o:['commissioned','commissionDate']},handover:{t:'Handing over',k:['handover'],o:['handedOver','handoverDate']},
   ...Object.fromEntries(BILLS.map(b=>['bill_'+b.k,{t:b.l+' billing',k:['billing'],bill:b.k,o:[b.open,b.openDate]}])),
@@ -611,7 +610,7 @@ function drawerHTML(){
   return `<div class="dh"><div><h2>${isNew?'New line item':esc(it.sr?'Item '+it.sr:'Line item')}</h2><div class="muted" style="font-size:12.5px">${isNew?'':`<span class="chip" style="--c:${secColor(it.section)}">${esc(it.section)}</span>`}${st?` · <span class="st ${ST_CLASS[st]}">${st}</span>`:''}</div>${isNew?'':`<div style="margin-top:6px;font-size:13.5px">${esc(String(it.desc||'').slice(0,160))}${String(it.desc||'').length>160?'…':''}</div>`}</div><button class="xbtn" data-act="closeDrawer" aria-label="Close">×</button></div>
   <div class="db">
     ${isNew?'':`<div class="sumstrip"><div><div class="v">${fmtN(t)||'—'}</div><div class="l">Target ${unit}</div></div>
-      ${canView('delivery')?`<div><div class="v">${fmtN(it.dTot)}</div><div class="l">Delivered${it.dDate?' · '+fmtDate(it.dDate):''}</div></div><div><div class="v ${t&&t-it.dTot<0?'neg':''}">${t?fmtN(t-it.dTot):'—'}</div><div class="l">To deliver</div></div>`:''}
+      ${canView('delivery')?`<div><div class="v">${fmtN(it.dTot)}</div><div class="l">Delivered${it.dDate?' · '+fmtDate(it.dDate):''}</div></div>`:''}
       ${canView('install')?`<div><div class="v">${fmtN(it.iTot)}</div><div class="l">Installed qty${it.iDate?' · '+fmtDate(it.iDate):''}</div></div><div><div class="v" style="font-size:14px">${it.iStart?fmtDate(it.iStart):'—'}</div><div class="l">Installation date</div></div>`:''}
       ${['testing','commission','handover'].filter(canView).map(k=>{const K=KIND[k];return `<div><div class="v">${fmtN(it[K.tot])}</div><div class="l">${K.done}${it[K.date]?' · '+fmtDate(it[K.date]):''}</div></div>`}).join('')}
       ${canView('billing')?(BILLS.filter(b=>it[b.tot]).length?BILLS.filter(b=>it[b.tot]):[BILLMAP.material]).map(b=>`<div><div class="v">${fmtN(it[b.tot])}</div><div class="l">${b.l} billed${it[b.date]?' · '+fmtDate(it[b.date]):''}</div></div>`).join(''):''}</div>`}
