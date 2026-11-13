@@ -24,6 +24,7 @@ const FIELDS=[
   {k:'delayReason',l:'Reason for delay',cat:'status',wide:1},
   {k:'remarks',l:'Remarks',cat:'status',type:'textarea',wide:1},
   {k:'delivered',l:'Delivered',cat:'opening',num:1},{k:'deliveryDate',l:'Delivery date',cat:'opening',type:'date'},
+  {k:'billAdv',l:'Advance billed',cat:'opening',num:1},{k:'billAdvDate',l:'Advance bill date',cat:'opening',type:'date'},
   {k:'billDwg',l:'Drawing approval billed',cat:'opening',num:1},{k:'billDwgDate',l:'Drawing approval bill date',cat:'opening',type:'date'},
   {k:'billMat',l:'Supply billed',cat:'opening',num:1},{k:'billMatDate',l:'Supply bill date',cat:'opening',type:'date'},
   {k:'billInst',l:'Installation billed',cat:'opening',num:1},{k:'billInstDate',l:'Installation bill date',cat:'opening',type:'date'},
@@ -38,7 +39,8 @@ const FIELDS=[
 const FMAP=Object.fromEntries(FIELDS.map(f=>[f.k,f]));
 FMAP.pos={k:'pos',l:'Purchase orders',cat:'data'};
 // billing stages, in tracker order
-const BILLS=[{k:'drawing',l:'Drawing approval',tot:'bdTot',date:'bdDate',open:'billDwg',openDate:'billDwgDate'},
+const BILLS=[{k:'advance',l:'Advance',tot:'baTot',date:'baDate',open:'billAdv',openDate:'billAdvDate'},
+  {k:'drawing',l:'Drawing approval',tot:'bdTot',date:'bdDate',open:'billDwg',openDate:'billDwgDate'},
   {k:'material',l:'Supply',tot:'bmTot',date:'bmDate',open:'billMat',openDate:'billMatDate'},
   {k:'installation',l:'Installation',tot:'biTot',date:'biDate',open:'billInst',openDate:'billInstDate'},
   {k:'testing',l:'Testing',tot:'btTot',date:'btDate',open:'billTest',openDate:'billTestDate'},
@@ -62,6 +64,7 @@ const CATS=[
   {k:'handover',l:'Handing over',hint:'Quantity handed over to the client, with date'},
   {k:'billing',l:'Billing',hint:'Billed quantity lots with invoice / RA bill details'},
   {k:'docs',l:'Documents',hint:'Approved drawings, TDS, approval letters, challans, RA bills, invoices and test certificates'},
+  {k:'requirements',l:'Site requirements',hint:'Raise material or work needed at site, and track it until it is fulfilled'},
 ];
 const CATMAP=Object.fromEntries(CATS.map(c=>[c.k,c]));
 const CAT_FIELDS={data:FIELDS.filter(f=>f.cat==='data').map(f=>f.k),status:FIELDS.filter(f=>f.cat==='status').map(f=>f.k)};
@@ -74,7 +77,7 @@ const KIND={delivery:{tot:'dTot',date:'dDate',open:'delivered',openDate:'deliver
   handover:{tot:'hTot',date:'hDate',open:'handedOver',openDate:'handoverDate',ref:'Handover document / area',done:'Handed over'},
   billing:{ref:'Invoice / RA bill no.'}};
 const LVL_LABEL={edit:'Can edit',request:'Needs approval',none:'Only see',hide:'No access'};
-const DEFAULT_LEVELS={data:'none',status:'request',delivery:'request',install:'request',testing:'request',commission:'request',handover:'request',billing:'hide',docs:'none'};
+const DEFAULT_LEVELS={data:'none',status:'request',delivery:'request',install:'request',testing:'request',commission:'request',handover:'request',billing:'hide',docs:'none',requirements:'request'};
 const DOCSECS=[{k:'drawing',l:'Approved drawings',sys:1,no:'Drawing no.',rev:1},{k:'tds',l:'Approved TDS',sys:1,no:'TDS / datasheet ref.',rev:1},{k:'letter',l:'Approval letters',no:'Letter ref. no.'},{k:'challan',l:'Delivery challans',no:'Challan / DC no.',needs:'delivery'},{k:'rabill',l:'RA bills',no:'RA bill no.',needs:'billing'},{k:'invoice',l:'Invoices',no:'Invoice no.',needs:'billing'},{k:'testcert',l:'Test certificates',sys:1,no:'Certificate / report no.',needs:'testing',dateL:'Test date',ph:'e.g. CCTV – Level 1 test report'}];
 const DOCMAP=Object.fromEntries(DOCSECS.map(d=>[d.k,d]));
 const DOC_EXT=['dwg','dxf','pdf','xls','xlsx','xlsm','csv','doc','docx','jpg','jpeg','png'];
@@ -189,20 +192,23 @@ async function refresh(force=true){
 const BELL='<svg viewBox="0 0 24 24" width="19" height="19" aria-hidden="true"><path fill="currentColor" d="M12 22a2.5 2.5 0 0 0 2.45-2h-4.9A2.5 2.5 0 0 0 12 22Zm7-6V11a7 7 0 0 0-5.5-6.84V3.5a1.5 1.5 0 0 0-3 0v.66A7 7 0 0 0 5 11v5l-2 2v1h18v-1l-2-2Z"/></svg>';
 const agoT=t=>{const m=Math.max(0,(Date.now()-new Date(t).getTime())/6e4);return m<60?Math.max(1,Math.round(m))+' min':m<1440?Math.round(m/60)+' h':Math.round(m/1440)+' d'};
 function alertWhat(d){if(d.type==='lot'){const [k,b]=String(d.what).split(':');return k==='billing'?billLabel(b)+' billing':(CATMAP[k]||{l:k}).l}
+  if(d.type==='req')return `Requirement “${String(d.what).slice(0,60)}”`;
   if(d.type==='change')return d.what==='data'?'Item data change':'Status change';return 'Document: '+((DOCMAP[d.what]||{l:d.what}).l.replace(/s$/,''))}
-const alertCounts=()=>{const a=S.alerts||{};const p=(a.pending||[]).reduce((x,y)=>x+y.n,0);const d=(a.decided||[]).filter(x=>x.new).length;return{p,d,all:p+d}};
+const alertCounts=()=>{const a=S.alerts||{};const p=(a.pending||[]).reduce((x,y)=>x+y.n,0);const d=(a.decided||[]).filter(x=>x.new).length;const r=(a.reqs||[]).reduce((x,y)=>x+(+y.new||0),0);return{p,d,r,all:p+d+r}};
 async function loadAlerts(){let a;try{a=await rpc('my_alerts')}catch(e){return}if(!a)return;
   const before=S.alerts?alertCounts():null;S.alerts=a;const now=alertCounts();
-  if(!before){if(now.p||now.d)setTimeout(()=>toast([now.p&&`${now.p} update request${now.p>1?'s':''} waiting for your approval`,now.d&&`${now.d} of your request${now.d>1?'s were':' was'} decided`].filter(Boolean).join(' · ')+' — see 🔔',7000),400)}
-  else{if(now.p>before.p)toast(`🔔 New update request${now.p-before.p>1?'s':''} waiting for approval (${now.p} in total)`,7000);
-       else if(now.d>before.d){const nd=(a.decided||[]).find(x=>x.new);toast(`🔔 Your ${alertWhat(nd).toLowerCase()} request was ${nd.status==='approved'?'approved':'rejected'}${nd.by?' by '+nd.by:''}`,7000)}}
+  if(!before){if(now.p||now.d)setTimeout(()=>toast([now.p&&`${now.p} update request${now.p>1?'s':''} waiting for your approval`,now.d&&`${now.d} of your request${now.d>1?'s were':' was'} updated`,now.r&&`${now.r} new site requirement${now.r>1?'s':''}`].filter(Boolean).join(' · ')+' — see 🔔',7000),400)}
+  else{if(now.r>before.r){const rr=(a.reqs||[]).find(x=>+x.new);toast(`🔔 New site requirement raised${rr?' on '+rr.name:''}`,7000)}
+       else if(now.p>before.p)toast(`🔔 New update request${now.p-before.p>1?'s':''} waiting for approval (${now.p} in total)`,7000);
+       else if(now.d>before.d){const nd=(a.decided||[]).find(x=>x.new);toast(nd.type==='req'?`🔔 ${alertWhat(nd)} is now ${REQ_ST[nd.status][1].toLowerCase()}${nd.by?' ('+nd.by+')':''}`:`🔔 Your ${alertWhat(nd).toLowerCase()} request was ${nd.status==='approved'?'approved':'rejected'}${nd.by?' by '+nd.by:''}`,7000)}}
   document.title=(now.all?`(${now.all}) `:'')+'Atronic Project Tracker'}
 function bellHTML(){const c=alertCounts();const a=S.alerts||{pending:[],decided:[]};const adm=isAdmin();
   const pend=(a.pending||[]).map(p=>`<button class="arow" data-act="alertGo" data-id="${esc(p.id)}" data-t="pending"><span class="acount">${p.n}</span><span><strong>${esc(p.name)}</strong><span class="asub">from ${esc((p.people||[]).join(', ')||'team')} · oldest waiting ${agoT(p.oldest)}</span></span></button>`).join('');
-  const dec=(a.decided||[]).map(d=>`<button class="arow ${d.new||d._wasNew?'anew':''}" data-act="alertGo" data-id="${esc(d.project)}" data-t="done"><span class="aic ${d.status==='approved'?'ok':'bad'}">${d.status==='approved'?'✓':'✕'}</span><span><strong>${esc(alertWhat(d))}</strong> ${d.status==='approved'?'approved':d.status==='removed'?'removed':'rejected'}${d.by?' by '+esc(d.by):''}<span class="asub">${esc(d.pname)}${d.item?' · '+esc((d.sr?d.sr+' · ':'')+d.item):''}${d.note?' · “'+esc(d.note)+'”':''} · ${agoT(d.at)} ago</span></span></button>`).join('');
+  const rqs=(a.reqs||[]).map(p=>`<button class="arow ${+p.new?'anew':''}" data-act="alertGo" data-id="${esc(p.id)}" data-t="reqs"><span class="acount">${p.n}</span><span><strong>${esc(p.name)}</strong>${+p.urgent?` <span class="st bad" style="font-size:11px">${p.urgent} urgent</span>`:''}<span class="asub">site requirement${p.n>1?'s':''} waiting for action · oldest ${agoT(p.oldest)}</span></span></button>`).join('');
+  const dec=(a.decided||[]).map(d=>d.type==='req'?`<button class="arow ${d.new||d._wasNew?'anew':''}" data-act="alertGo" data-id="${esc(d.project)}" data-t="reqs"><span class="aic ${d.status==='cancelled'?'bad':'ok'}">${d.status==='fulfilled'?'✓':d.status==='cancelled'?'✕':'➜'}</span><span><strong>${esc(alertWhat(d))}</strong> is now ${esc(REQ_ST[d.status][1].toLowerCase())}${d.by?' ('+esc(d.by)+')':''}<span class="asub">${esc(d.pname)}${d.note?' · “'+esc(d.note)+'”':''} · ${agoT(d.at)} ago</span></span></button>`:`<button class="arow ${d.new||d._wasNew?'anew':''}" data-act="alertGo" data-id="${esc(d.project)}" data-t="done"><span class="aic ${d.status==='approved'?'ok':'bad'}">${d.status==='approved'?'✓':'✕'}</span><span><strong>${esc(alertWhat(d))}</strong> ${d.status==='approved'?'approved':d.status==='removed'?'removed':'rejected'}${d.by?' by '+esc(d.by):''}<span class="asub">${esc(d.pname)}${d.item?' · '+esc((d.sr?d.sr+' · ':'')+d.item):''}${d.note?' · “'+esc(d.note)+'”':''} · ${agoT(d.at)} ago</span></span></button>`).join('');
   return `<div class="bellw"><button class="bell ${S.bellOpen?'on':''}" data-act="bell" aria-label="Alerts${c.all?': '+c.all+' new':''}" aria-expanded="${!!S.bellOpen}">${BELL}${c.all?`<span class="bbadge">${c.all>99?'99+':c.all}</span>`:''}</button>
-  ${S.bellOpen?`<div class="bdrop" role="dialog" aria-label="Alerts">${adm?`<div class="ahd">Waiting for your approval${c.p?` (${c.p})`:''}</div>${pend||'<div class="aempty">Nothing waiting. 👍</div>'}`:''}
-    ${adm&&!dec?'':`<div class="ahd">${adm?'Your own requests':'Your update requests'}</div>${dec||'<div class="aempty">No decisions on your requests in the last 14 days. You’ll see here when an admin approves or rejects something you sent.</div>'}`}</div>`:''}</div>`}
+  ${S.bellOpen?`<div class="bdrop" role="dialog" aria-label="Alerts">${adm?`<div class="ahd">Waiting for your approval${c.p?` (${c.p})`:''}</div>${pend||'<div class="aempty">Nothing waiting. 👍</div>'}`:''}${rqs?`<div class="ahd">Site requirements to act on</div>${rqs}`:''}
+    ${(adm||rqs)&&!dec?'':`<div class="ahd">${adm?'Your own requests':'Your requests'}</div>${dec||'<div class="aempty">Nothing new in the last 14 days. You’ll see here when an admin approves or rejects something you sent, or a requirement you raised moves on.</div>'}`}</div>`:''}</div>`}
 async function after(promise,okMsg){try{const r=await promise;if(okMsg)toast(okMsg);await refresh(true);return r}catch(e){toast(errMsg(e),6000);throw e}}
 async function purgeExpired(){try{const ids=await rpc('expired_projects');for(const pid of ids||[]){const paths=await rpc('purge_project',{pid});if(paths&&paths.length)await sb.storage.from(BUCKET).remove(paths)}if((ids||[]).length)refresh()}catch(e){}}
 
@@ -324,17 +330,18 @@ function trashSection(){
 function projOpts(){return S.projects.filter(p=>!p.deleted_at).map(x=>`<option value="${esc(x.id)}" ${x.id===S.pid?'selected':''}>${esc(x.name)}${isDone(x)?' (completed)':''}</option>`).join('')}
 function projectBar(){
   const p=cur();const pc=isAdmin()?pendingAll().length:pendingAll().filter(r=>r.mine).length;
-  const tabs=[['tracker','Tracker'],...(canView('docs')?[['docs','Documents']]:[]),['approvals','Pending update requests'],['activity','Activity'],['access','Access']];
+  const rqOpen=(PD()&&PD().requirements||[]).filter(r=>r.status==='raised').length;const rqBadge=['admin','edit'].includes(myLevel('requirements'))?rqOpen:0;
+  const tabs=[['tracker','Tracker'],...(canView('docs')?[['docs','Documents']]:[]),...(canView('requirements')?[['reqs','Site requirements']]:[]),['approvals','Pending update requests'],...(isAdmin()?[['ra','RA bills']]:[]),['activity','Activity'],['access','Access']];
   return `<div class="pbar2"><div class="crumb"><button class="lnk" data-act="view" data-v="projects">Projects</button><span class="muted">›</span>
     <label class="sr" for="projSel">Project</label><select id="projSel" data-change="proj">${projOpts()}</select>
     <span class="muted" style="font-size:13px">${esc([p.client,p.location].filter(Boolean).join(', '))}</span>
     ${isAdmin()?`<button class="btn" style="margin-left:auto" data-act="editProject" data-id="${esc(p.id)}">Project details</button>`:''}</div>
-    <div class="seg ptabs" role="tablist">${tabs.map(([k,l])=>`<button role="tab" data-act="ptab" data-t="${k}" aria-pressed="${S.ptab===k}">${l}${k==='approvals'&&pc?`<span class="badge">${pc}</span>`:''}</button>`).join('')}</div></div>`;
+    <div class="seg ptabs" role="tablist">${tabs.map(([k,l])=>`<button role="tab" data-act="ptab" data-t="${k}" aria-pressed="${S.ptab===k}">${l}${k==='approvals'&&pc?`<span class="badge">${pc}</span>`:''}${k==='reqs'&&rqBadge?`<span class="badge ob">${rqBadge}</span>`:''}</button>`).join('')}</div></div>`;
 }
 function vProject(){
   if(!S.pid||!cur())return vProjects();
   if(!PD())return projectBar()+`<div class="panel muted"><span class="spin"></span> Loading project…</div>`;
-  const b=S.ptab==='docs'&&canView('docs')?vDocs():S.ptab==='approvals'?vRequests():S.ptab==='activity'?vActivity():S.ptab==='access'?vAccess():vTracker();
+  const b=S.ptab==='reqs'&&canView('requirements')?vReqs():S.ptab==='ra'&&isAdmin()?vRA():S.ptab==='docs'&&canView('docs')?vDocs():S.ptab==='approvals'?vRequests():S.ptab==='activity'?vActivity():S.ptab==='access'?vAccess():vTracker();
   return projectBar()+b;
 }
 
@@ -513,6 +520,50 @@ function vRequests(){
   ${show.length?show.map(card).join(''):`<div class="panel muted">${S.reqTab==='pending'?'No pending update requests.':'Nothing decided yet.'}</div>`}`;
 }
 
+/* site requirements */
+const REQ_ST={raised:['warn','Raised'],acknowledged:['info','Acknowledged'],ordered:['info','Ordered'],dispatched:['info','Dispatched'],fulfilled:['ok','Fulfilled'],cancelled:['plain','Cancelled']};
+const REQ_OPEN=['raised','acknowledged','ordered','dispatched'];
+const reqChip=r=>`<span class="st ${REQ_ST[r.status][0]}">${REQ_ST[r.status][1]}</span>`;
+function vReqs(){const all=PD().requirements||[];const lv=myLevel('requirements');const handler=['admin','edit'].includes(lv);
+  const f=S.reqF||'open';const q=(S.reqQ||'').trim().toLowerCase();
+  const list=all.filter(r=>(f==='all'||(f==='open'?REQ_OPEN.includes(r.status):r.status===f))&&(!q||[r.title,r.location,r.note,r.created_by_name].join(' ').toLowerCase().includes(q)))
+    .sort((a,b)=>(f==='open'?((b.priority==='Urgent')-(a.priority==='Urgent'))||String(a.need_by||'9').localeCompare(String(b.need_by||'9')):0)||String(b.created_at).localeCompare(String(a.created_at)));
+  const cnt=k=>all.filter(r=>k==='open'?REQ_OPEN.includes(r.status):r.status===k).length;const td=today();
+  const row=r=>{const it=r.item_id&&S.M.items.find(x=>x.id===r.item_id);const late=REQ_OPEN.includes(r.status)&&r.need_by&&r.need_by<td;
+    const canEdit=handler||(r.mine&&lv==='request'&&r.status==='raised');
+    return `<tr class="${r.status==='cancelled'?'off':''}"><td>${r.priority==='Urgent'?'<span class="st bad">Urgent</span>':'<span class="muted" style="font-size:12px">Normal</span>'}</td>
+    <td style="text-align:left"><strong>${esc(r.title)}</strong>${it?`<div class="mk"><button class="lnk" data-act="open" data-id="${esc(it.id)}">${esc(itemLabel(it))}</button></div>`:''}${r.note?`<div class="mk">${esc(r.note)}</div>`:''}</td>
+    <td>${r.qty!=null?`<b>${fmtN(r.qty)}</b> <span class="muted">${esc(r.unit||'')}</span>`:'—'}</td><td>${esc(r.location)||'—'}</td>
+    <td class="${late?'neg':''}">${r.need_by?esc(fmtDate(r.need_by))+(late?'<div class="mk" style="color:inherit">overdue</div>':''):'—'}</td>
+    <td>${esc(r.created_by_name||'')}<div class="mk">${fmtTime(r.created_at)}</div></td>
+    <td>${reqChip(r)}${r.status_note?`<div class="mk">${esc(r.status_note)}</div>`:''}${r.status!=='raised'&&r.updated_by_name?`<div class="mk">by ${esc(r.updated_by_name)}, ${fmtTime(r.updated_at)}</div>`:''}</td>
+    <td style="white-space:nowrap">${handler?`<button class="btn" style="padding:4px 10px;font-size:12.5px" data-act="reqStatus" data-r="${esc(r.id)}">Update</button> `:''}${canEdit?`<button class="lnk" data-act="reqEdit" data-r="${esc(r.id)}">Edit</button> `:''}${!handler&&canEdit?`<button class="lnk bad" data-act="reqCancel" data-r="${esc(r.id)}">Cancel</button>`:''}${isAdmin()?` <button class="lnk bad" data-act="reqDel" data-r="${esc(r.id)}">Delete</button>`:''}</td></tr>`};
+  return `<div class="row" style="margin-bottom:12px"><div><h2 style="margin:0">Site requirements</h2><p class="muted" style="margin:4px 0 0;max-width:80ch">Material or work needed at site, raised by the team and tracked until it’s fulfilled.${handler?' You can update the status of any requirement.':lv==='request'?' You can raise requirements; the office updates their status.':''}</p></div>
+    <span class="row" style="margin-left:auto"><button class="btn" data-act="reqExport">Export Excel</button>${['admin','edit','request'].includes(lv)?`<button class="btn pri" data-act="reqNew">+ Raise requirement</button>`:''}</span></div>
+  <div class="row" style="margin-bottom:12px"><div class="seg">${[['open','Open'],['fulfilled','Fulfilled'],['cancelled','Cancelled'],['all','All']].map(([k,l])=>`<button data-act="reqF" data-f="${k}" aria-pressed="${f===k}">${l} (${k==='all'?all.length:cnt(k)})</button>`).join('')}</div>
+    <input type="search" id="reqq" data-input="reqq" placeholder="Search requirements" value="${esc(S.reqQ||'')}" style="margin-left:auto;min-width:220px;padding:7px 10px;border:1px solid var(--line);border-radius:6px;background:var(--panel)"></div>
+  <div class="tbl-wrap"><table class="ttbl rqt"><thead><tr><th>Priority</th><th style="text-align:left">Requirement</th><th>Qty</th><th>Location / area</th><th>Needed by</th><th>Raised by</th><th>Status</th><th></th></tr></thead>
+  <tbody>${list.map(row).join('')||`<tr><td colspan="8" class="muted" style="padding:22px">${f==='open'?'No open requirements.':'Nothing here.'}</td></tr>`}</tbody></table></div>`}
+function reqExport(){const all=PD().requirements||[];const f=S.reqF||'open';const list=all.filter(r=>f==='all'||(f==='open'?REQ_OPEN.includes(r.status):r.status===f)).sort((a,b)=>String(a.created_at).localeCompare(String(b.created_at)));
+  if(!list.length){toast('Nothing to export in this view.');return}
+  const rows=[['Raised on','Priority','Requirement','Line item','ELV system','Qty','Unit','Location / area','Needed by','Status','Status note','Raised by','Last updated by','Last updated on','Note'],
+    ...list.map(r=>{const it=r.item_id&&S.M.items.find(x=>x.id===r.item_id);return [String(r.created_at).slice(0,10),r.priority,r.title,it?itemLabel(it):'',it?it.section:'',r.qty??'',r.unit,r.location,r.need_by,REQ_ST[r.status][1],r.status_note,r.created_by_name,r.status!=='raised'?r.updated_by_name:'',r.status!=='raised'?String(r.updated_at).slice(0,10):'',r.note]})];
+  const lbl={open:'Open',fulfilled:'Fulfilled',cancelled:'Cancelled',all:'All'}[f];
+  saveBook([[`Site requirements (${lbl})`.slice(0,31),rows,[{wch:11},{wch:9},{wch:40},{wch:40},{wch:16},{wch:7},{wch:7},{wch:20},{wch:11},{wch:13},{wch:28},{wch:18},{wch:18},{wch:14},{wch:30}]]],`Site_Requirements_${lbl}_${String(cur().name).replace(/[^\w-]+/g,'_')}_${today()}.xlsx`)}
+function reqModal(r){const its=S.M.items.filter(trackable);const e=r||{priority:'Normal'};
+  modal(`<h2>${r?'Edit requirement':'Raise a site requirement'}</h2><p class="muted" style="margin:0 0 12px">${esc(cur().name)}</p>
+  <form class="form" id="rqform" onsubmit="return false"><label class="wide">Line item (optional)<select name="item" data-change="rqItem"><option value="">— Not linked to a line item —</option>${its.map(i=>`<option value="${esc(i.id)}" ${e.item_id===i.id?'selected':''}>${esc((i.section?i.section+' · ':'')+itemLabel(i))}</option>`).join('')}</select></label>
+  <label class="wide">What is required *<input name="title" value="${esc(e.title||'')}" placeholder="e.g. 4-core cable, cameras for Level 2, scissor lift"></label>
+  <label>Qty<input name="qty" type="number" step="any" min="0" value="${esc(e.qty??'')}"></label><label>Unit<input name="unit" value="${esc(e.unit||'')}" placeholder="Nos, m, Box"></label>
+  <label>Needed by<input name="need_by" type="date" value="${esc(e.need_by||'')}"></label><label>Location / area<input name="location" value="${esc(e.location||'')}"></label>
+  <label>Priority<select name="priority">${['Normal','Urgent'].map(x=>`<option ${x===e.priority?'selected':''}>${x}</option>`).join('')}</select></label>
+  <label class="wide">Note<textarea name="note">${esc(e.note||'')}</textarea></label></form>
+  <div class="row" style="justify-content:flex-end;margin-top:14px"><button class="btn" data-act="closeModal">Cancel</button><button class="btn pri" data-act="reqSave" ${r?`data-r="${esc(r.id)}"`:''}>${r?'Save':'Raise requirement'}</button></div>`)}
+function reqStatusModal(r){modal(`<h2>Update requirement</h2><p style="margin:0 0 12px"><strong>${esc(r.title)}</strong>${r.qty!=null?` · ${fmtN(r.qty)} ${esc(r.unit||'')}`:''}<br><span class="muted">Raised by ${esc(r.created_by_name||'')}, ${fmtTime(r.created_at)}</span></p>
+  <form class="form" id="rsform" onsubmit="return false"><label class="wide">Status<select name="status">${Object.entries(REQ_ST).map(([k,[,l]])=>`<option value="${k}" ${k===r.status?'selected':''}>${l}</option>`).join('')}</select></label>
+  <label class="wide">Note for the team (optional)<input name="status_note" value="${esc(r.status_note||'')}" placeholder="e.g. PO 1123 placed, arriving Monday"></label></form>
+  <div class="row" style="justify-content:flex-end;margin-top:14px"><button class="btn" data-act="closeModal">Cancel</button><button class="btn pri" data-act="reqStatusSave" data-r="${esc(r.id)}">Save</button></div>`)}
+
 /* activity */
 function vActivity(){const a=PD().activity||[];
   return `<h2 style="margin:0">Activity</h2><p class="muted" style="margin:4px 0 14px">Everything recorded on this project (latest 300).</p>
@@ -539,10 +590,10 @@ function addPersonModal(){
   <label class="wide">Start with<select name="preset"><option value="site">Site team — records delivery to handing over (needs approval)</option><option value="view">View only — sees progress, no billing</option><option value="billing">Billing — records RA bills</option><option value="vendor">Vendor — sends deliveries for approval, sees drawings & TDS</option></select></label></form>
   <p class="muted" style="font-size:12.5px">You can fine-tune each area in the table afterwards.</p>
   <div class="row" style="justify-content:flex-end;margin-top:14px"><button class="btn" data-act="closeModal">Cancel</button><button class="btn pri" data-act="doAddPerson">Add person</button></div>`)}
-const PRESETS={site:{data:'none',status:'request',delivery:'request',install:'request',testing:'request',commission:'request',handover:'request',billing:'hide',docs:'request'},
-  view:{data:'none',status:'none',delivery:'none',install:'none',testing:'none',commission:'none',handover:'none',billing:'hide',docs:'none'},
-  billing:{data:'none',status:'hide',delivery:'none',install:'hide',testing:'hide',commission:'hide',handover:'hide',billing:'edit',docs:'request'},
-  vendor:{data:'none',status:'none',delivery:'request',install:'none',testing:'none',commission:'none',handover:'none',billing:'hide',docs:'none'}};
+const PRESETS={site:{data:'none',status:'request',delivery:'request',install:'request',testing:'request',commission:'request',handover:'request',billing:'hide',docs:'request',requirements:'request'},
+  view:{data:'none',status:'none',delivery:'none',install:'none',testing:'none',commission:'none',handover:'none',billing:'hide',docs:'none',requirements:'none'},
+  billing:{data:'none',status:'hide',delivery:'none',install:'hide',testing:'hide',commission:'hide',handover:'hide',billing:'edit',docs:'request',requirements:'hide'},
+  vendor:{data:'none',status:'none',delivery:'request',install:'none',testing:'none',commission:'none',handover:'none',billing:'hide',docs:'none',requirements:'none'}};
 
 /* admins */
 function vAdmins(){const a=S.admins;
@@ -693,7 +744,7 @@ async function saveItem(btn){
 }
 
 /* ---------- modals ---------- */
-function modal(html){$('#modal').innerHTML=`<div class="mbox">${html}</div>`;$('#modal').classList.add('open');$('#scrim').classList.add('open');setTimeout(()=>{const f=$('#modal input,#modal select,#modal button');f&&f.focus()},30)}
+function modal(html,wide){$('#modal').innerHTML=`<div class="mbox${wide?' wide':''}">${html}</div>`;$('#modal').classList.add('open');$('#scrim').classList.add('open');setTimeout(()=>{const f=$('#modal input,#modal select,#modal button');f&&f.focus()},30)}
 function closeModal(){$('#modal').classList.remove('open');$('#modal').innerHTML='';if(!$('#drawer').classList.contains('open'))$('#scrim').classList.remove('open')}
 function projectForm(p={},title,btnLabel,act,extra=''){
   modal(`<h2>${title}</h2>${extra}<form class="form" id="pform" onsubmit="return false" style="margin-top:12px">
@@ -718,7 +769,7 @@ const xdate=v=>{if(typeof v==='number'&&v>20000&&v<80000)return new Date(Date.UT
 const NEWCOLS={sr:/^sr/i,section:/^elv system$/i,desc:/^item$/i,make:/^make$/i,model:/^model$/i,qty:/^qty\.?$/i,unit:/^unit$/i,woQty:/^new wo/i,
   drawing:/^drawing (status|approval)$/i,drawingDate:/^drawing (status )?date$/i,tds:/^tds (status|approval)$/i,tdsDate:/^tds (status )?date$/i,
   vendor:/^po vendor$/i,poDate:/^po date$/i,expStatus:/^delivery status$/i,delivered:/^delivered qty$/i,deliveryDate:/^delivery date$/i,
-  billDwg:/^drawing approval billed qty$/i,billDwgDate:/^drawing approval bill date$/i,billTest:/^testing billed qty$/i,billTestDate:/^testing bill date$/i,billComm:/^commissioning billed qty$/i,billCommDate:/^commissioning bill date$/i,billHand:/^handing over billed qty$/i,billHandDate:/^handing over bill date$/i,poNo:/^po no\.?$/i,poQty:/^po qty$/i,
+  billAdv:/^advance billed qty$/i,billAdvDate:/^advance bill date$/i,billDwg:/^drawing approval billed qty$/i,billDwgDate:/^drawing approval bill date$/i,billTest:/^testing billed qty$/i,billTestDate:/^testing bill date$/i,billComm:/^commissioning billed qty$/i,billCommDate:/^commissioning bill date$/i,billHand:/^handing over billed qty$/i,billHandDate:/^handing over bill date$/i,poNo:/^po no\.?$/i,poQty:/^po qty$/i,
   billMat:/^supply billed qty$/i,billMatDate:/^supply bill date$/i,billInst:/^installation billed qty$/i,billInstDate:/^installation bill date$/i,
   installed:/^installed qty$/i,tested:/^tested qty$/i,testDate:/^(tested qty|testing) date$/i,commissioned:/^commissioned qty$/i,commissionDate:/^(commissioned qty|commissioning) date$/i,handedOver:/^handed over qty$/i,handoverDate:/^(handed over qty|handing over|handover) date$/i,installDate:/^installation (start )?date$/i,contractor:/^wo \(?contractor/i,pendingReason:/^pending reason$/i,delayReason:/^reason for delay/i,remarks:/^remarks$/i,
   rateW:/^unit rate wo$/i,rateP:/^unit rate purchase$/i};
@@ -837,6 +888,151 @@ function reportExcel(R){const p=cur();const pc=v=>Math.round(v*1000)/10;
   if(R.dr!=null)sheets.push(['Drawing & TDS',[['Date','ELV system','Sr.','Item','Document','Status'],...R.appr.map(a=>[a.d,a.it.section,a.it.sr,a.it.desc,a.what,a.st])],[{wch:11},{wch:16},{wch:6},{wch:60},{wch:10},{wch:12}]]);
   saveBook(sheets,`Progress_Report_${String(p.name).replace(/[^\w-]+/g,'_')}_${R.from}_to_${R.to}.xlsx`)}
 
+/* ---------- RA bills (admins) — laid out like Atronic's RA bill workbooks ---------- */
+const STAGE_KIND={material:'delivery',installation:'install',testing:'testing',commission:'commission',handover:'handover'};
+const DEFAULT_TERMS={advance:20,drawing:0,material:55,installation:15,testing:0,commission:5,handover:5};
+const r2=v=>Math.round((v||0)*100)/100;
+const rupees=v=>'₹'+(v||0).toLocaleString('en-IN',{minimumFractionDigits:2,maximumFractionDigits:2});
+const dmy=d=>d?String(d).slice(0,10).split('-').reverse().join('-'):'';
+const SEC_LETTER=i=>{let s='',n=i+1;while(n>0){const m=(n-1)%26;s=String.fromCharCode(65+m)+s;n=Math.floor((n-1)/26)}return s};
+function stageText(k,pct,terms){const p=`${fmtN(pct)}%`;return {advance:`${p} Advance Against Work order Signing`,drawing:`${p} Against Drawing Approval`,material:`${p} Against Materials delivery at site`,
+  installation:`${p} Against Completion of Installation`,testing:`${p} Against Completion of Testing`,commission:num((terms||{}).testing)>0?`${p} Against Completion of Commissioning`:`${p} Against Completion of testing, Commissioning.`,handover:`${p} Against Completion Handing over.`}[k]||`${p} ${billLabel(k)}`}
+// sums over a bill in the new format (sections → items → stages)
+function raSecTot(sec){let boq=0,prev=0,th=0;sec.items.forEach(it=>{boq+=(it.qty||0)*(it.rate||0);it.stages.forEach(st=>{const pr=(it.rate||0)*st.pct/100;prev+=(st.prev||0)*pr;th+=(st.qty||0)*pr})});return{boq:r2(boq),prev:r2(prev),th:r2(th),cum:r2(prev+th)}}
+function raTotals(b){if(b.secs){const t=b.secs.map(raSecTot);const sum=k=>r2(t.reduce((a,x)=>a+x[k],0));const thisG=sum('th'),prevG=sum('prev');const gst=r2(thisG*(b.gst||0)/100),ret=r2(thisG*(b.ret||0)/100);
+    return{boq:sum('boq'),thisG,prevG,cumG:r2(thisG+prevG),gst,ret,net:r2(thisG+gst-ret)}}
+  const thisG=r2((b.lines||[]).reduce((a,l)=>a+(l.amt||0),0));const prevG=r2(Object.values(b.prevBySys||{}).reduce((a,v)=>a+v,0));const gst=r2(thisG*(b.gst||0)/100),ret=r2(thisG*(b.ret||0)/100);
+  return{boq:0,thisG,prevG,cumG:r2(thisG+prevG),gst,ret,net:r2(thisG+gst-ret)}}
+function computeRA(upto,terms){const rates=PD().rates||{};let noRate=0;const edit=[];
+  const secs=sections(S.M.items).map(sec=>({name:sec.name,items:sec.list.filter(trackable).map(it=>{const t=target(it);const rate=num((rates[it.id]||{}).w)||0;if(!rate)noRate++;
+    const stages=BILLS.filter(b=>(num(terms[b.k])||0)>0).map(b=>{const prev=r2(it[b.tot]||0);
+      const elig=b.k==='advance'?t:b.k==='drawing'?(isOk(it.drawing)&&(!it.drawingDate||it.drawingDate<=upto)?t:0):Math.min(qtyAsOf(it,STAGE_KIND[b.k],upto),t);
+      const q=rate?r2(Math.max(0,Math.min(elig,t)-prev)):0;return{k:b.k,pct:num(terms[b.k]),prev,qty:q,max:q}});
+    return{item:it.id,sr:it.sr||'',desc:String(it.desc||'').replace(/\s+/g,' ').trim(),unit:it.unit||'',qty:t,rate,stages}})})).filter(s=>s.items.length);
+  secs.forEach((s,si)=>s.items.forEach((it,ii)=>it.stages.forEach((st,ki)=>{if(st.max>0)edit.push({si,ii,ki})})));
+  return{secs,edit,noRate}}
+function vRA(){const bills=[...(PD().ra_bills||[])].sort((a,b)=>b.no-a.no);const rates=PD().rates||{};const anyRate=Object.values(rates).some(r=>num(r.w));
+  return `<div class="row" style="margin-bottom:12px"><div><h2 style="margin:0">RA bills</h2><p class="muted" style="margin:4px 0 0;max-width:85ch">Generate the next running-account bill from work recorded since the last one: for every BOQ item and payment stage, quantity done less quantity already billed, at the WO rate × stage %. The Excel matches your RA bill format (Summary sheet + item-wise sheet with formulas). Only admins see this tab.</p></div>
+    <button class="btn pri" style="margin-left:auto" data-act="raNew" ${anyRate?'':'disabled'}>+ Generate RA bill</button></div>
+  ${anyRate?'':'<div class="panel" style="margin-bottom:12px">No WO unit rates on this project yet. Add rates (Rates in an item, or Update from Excel with a “Unit rate WO” column) to generate RA bills.</div>'}
+  <div class="tbl-wrap"><table class="ttbl"><thead><tr><th>RA bill</th><th>Bill date</th><th>Work up to</th><th>Previous bills</th><th>This bill</th><th>GST</th><th>Amount with GST</th><th>Generated by</th><th></th></tr></thead><tbody>
+  ${bills.map(b=>{const T=raTotals(b.data);return `<tr><td><strong>RA-${b.no}</strong>${b.data.hdr&&b.data.hdr.period?`<div class="mk">${esc(b.data.hdr.period)}</div>`:''}${b.data.record?'':'<div class="mk">not recorded in tracker</div>'}</td><td>${esc(fmtDate(b.bill_date))}</td><td>${esc(fmtDate(b.upto))}</td><td>${rupees(T.prevG)}</td><td><strong>${rupees(T.thisG)}</strong></td><td>${rupees(T.gst)}</td><td><strong>${rupees(T.net)}</strong></td>
+    <td>${esc(b.created_by_name||'')}<div class="mk">${fmtTime(b.created_at)}</div></td><td style="white-space:nowrap"><button class="btn" style="padding:4px 10px;font-size:12.5px" data-act="raXl" data-b="${esc(b.id)}">Excel</button> <button class="btn" style="padding:4px 10px;font-size:12.5px" data-act="raPrint" data-b="${esc(b.id)}">Print / PDF</button> <button class="lnk bad" data-act="raDel" data-b="${esc(b.id)}">Delete</button></td></tr>`}).join('')||'<tr><td colspan="9" class="muted" style="padding:22px">No RA bills yet.</td></tr>'}</tbody></table></div>`}
+function raModal(){const p=PD().project||{};const bt=p.bill_terms||{};const terms={...DEFAULT_TERMS,...bt};const next=Math.max(0,...(PD().ra_bills||[]).map(b=>b.no))+1;const pr=cur();
+  const inp=(n,l,v,ph='',w='')=>`<label ${w}>${l}<input name="${n}" value="${esc(v??'')}" placeholder="${esc(ph)}"></label>`;
+  modal(`<h2>Generate RA bill</h2><p class="muted" style="margin:0 0 12px">${esc(pr.name)} · quantities are worked out from the tracker; you can change them before saving.</p>
+  <form class="form" id="raform" onsubmit="return false" style="grid-template-columns:repeat(auto-fit,minmax(150px,1fr))">
+  <label>RA bill no.<input name="no" type="number" min="1" value="${next}"></label><label>Date of submission<input name="date" type="date" value="${today()}"></label><label>Work done up to<input name="upto" type="date" value="${today()}"></label>
+  <label>GST %<input name="gst" data-input="raterm" type="number" step="any" min="0" value="${esc(bt._gst!=null?bt._gst:18)}"></label><label>Retention %<input name="ret" data-input="raterm" type="number" step="any" min="0" value="${esc(bt._ret!=null?bt._ret:0)}"></label>
+  <div class="sech" style="grid-column:1/-1"><h3>Bill header</h3><span class="muted" style="font-size:12px">Saved for the next bill</span></div>
+  ${inp('client','Client',bt._client??pr.client)}${inp('address','Site address',bt._address??pr.location,'',`style="grid-column:span 2"`)}${inp('wo','WO no. & date',bt._wo,'e.g. 488 & 11.11.2024')}
+  ${inp('contractor','Contractor',bt._contractor??'Atronic Systems Pvt. Ltd')}${inp('work','Item of work',bt._work??'SITC of ELV System')}${inp('invoice','Tax invoice no.','')}${inp('period','Period of R/A bill',`RA-${String(next).padStart(2,'0')} `,'e.g. RA-08 Installation of Cat 6A and FAS',`style="grid-column:span 2"`)}
+  <div class="sech" style="grid-column:1/-1"><h3>Payment terms — % of the WO rate paid at each stage</h3><span class="muted" style="font-size:12px" id="raSum"></span></div>
+  ${BILLS.map(b=>`<label>${esc(b.l)} %<input name="t_${b.k}" type="number" step="any" min="0" max="100" value="${esc(terms[b.k]??0)}" data-input="raterm"></label>`).join('')}
+  <label class="wide row" style="gap:8px;flex-wrap:nowrap;font-weight:500;grid-column:1/-1"><input type="checkbox" name="record" checked style="width:auto"> Record this bill’s quantities in the tracker (billing entries “RA-n”), so the next RA bill starts from here</label></form>
+  <div class="row" style="justify-content:flex-end;margin-top:10px"><button class="btn" data-act="raCalc">Calculate</button></div><div id="raPrev"></div>`,true);raTermSum()}
+function raTermSum(){const f=$('#raform');if(!f)return;const t=BILLS.reduce((a,b)=>a+(num(f.elements['t_'+b.k].value)||0),0);const e=$('#raSum');if(e){e.textContent=`Total ${r2(t)}%`;e.style.color=Math.abs(t-100)>0.01?'var(--bad)':''}}
+function raForm(){const v=Object.fromEntries(new FormData($('#raform')));const terms={};BILLS.forEach(b=>terms[b.k]=num(v['t_'+b.k])||0);
+  Object.assign(terms,{_gst:num(v.gst)||0,_ret:num(v.ret)||0,_client:v.client,_address:v.address,_wo:v.wo,_contractor:v.contractor,_work:v.work});
+  return{no:parseInt(v.no)||null,date:coerce('deliveryDate',v.date)||today(),upto:coerce('deliveryDate',v.upto)||today(),terms,gst:terms._gst,ret:terms._ret,record:!!v.record,
+    hdr:{project:cur().name,address:v.address,client:v.client,wo:v.wo,contractor:v.contractor,work:v.work,invoice:v.invoice,period:v.period}}}
+const raStage=(R,e)=>R.secs[e.si].items[e.ii].stages[e.ki];
+function raPreview(){const R=S._ra;const T=raTotals(R);
+  $('#raPrev').innerHTML=`${R.noRate?`<p class="muted" style="font-size:12.5px;margin:10px 0 0">${R.noRate} line item${R.noRate>1?'s have':' has'} no WO rate, so ${R.noRate>1?'they show':'it shows'} at zero.</p>`:''}
+  ${R.edit.length?`<p class="muted" style="font-size:12.5px;margin:10px 0 0">${R.edit.length} item stage${R.edit.length>1?'s':''} to bill. The saved bill lists every BOQ item, like your RA bill sheets.</p><div class="tbl-wrap" style="margin-top:8px;max-height:46vh"><table class="ttbl"><thead><tr><th>Sr.</th><th style="text-align:left">Item</th><th style="text-align:left">Stage</th><th>Rate</th><th>Previous qty</th><th>This bill qty</th><th>Amount this bill</th></tr></thead><tbody>
+  ${R.edit.map((e,i)=>{const it=R.secs[e.si].items[e.ii];const st=raStage(R,e);return `<tr><td>${esc(it.sr)}</td><td style="text-align:left;max-width:330px"><div class="desc">${esc(it.desc)}</div><div class="mk">${esc(R.secs[e.si].name)}</div></td><td style="text-align:left">${esc(stageText(st.k,st.pct,R.terms))}</td><td>${fmtN(it.rate)}</td><td>${fmtN(st.prev)} ${esc(it.unit)}</td>
+    <td><input type="number" step="any" min="0" data-ra="${i}" value="${st.qty}" style="width:90px;padding:5px 7px;border:1px solid var(--line);border-radius:6px;background:var(--panel);text-align:center"><div class="mk">max ${fmtN(st.max)}</div></td><td id="ra_a${i}">${rupees(st.qty*it.rate*st.pct/100)}</td></tr>`}).join('')}</tbody></table></div>`
+  :'<div class="panel" style="margin-top:12px">Nothing new to bill: no work recorded up to this date beyond what has already been billed.</div>'}
+  <div class="ratot" id="raTot">${raTotHTML(T)}</div>
+  <div class="row" style="justify-content:flex-end;margin-top:12px"><button class="btn" data-act="closeModal">Cancel</button><button class="btn pri" data-act="raSave" ${R.edit.length?'':'disabled'}>Save RA bill</button></div>`}
+const raTotHTML=T=>`<div><span>Previous bills</span><b>${rupees(T.prevG)}</b></div><div><span>This bill</span><b>${rupees(T.thisG)}</b></div><div><span>GST</span><b>${rupees(T.gst)}</b></div>${T.ret?`<div><span>Retention</span><b>− ${rupees(T.ret)}</b></div>`:''}<div class="net"><span>${T.ret?'Net payable':'Amount with GST'}</span><b>${rupees(T.net)}</b></div>`;
+// bills saved before the new layout only kept the billed lines; turn them into sections for the outputs
+function raSecs(d){if(d.secs)return d.secs;const m=new Map();(d.lines||[]).forEach(l=>{if(!m.has(l.section))m.set(l.section,new Map());const im=m.get(l.section);
+  if(!im.has(l.item))im.set(l.item,{item:l.item,sr:l.sr,desc:l.desc,unit:l.unit,qty:0,rate:l.rate,stages:[]});im.get(l.item).stages.push({k:l.stage,pct:l.pct,prev:l.prev,qty:l.qty})});
+  return [...m].map(([name,im])=>({name,items:[...im.values()]}))}
+function raHdr(b){const d=b.data;const h=d.hdr||{};const p=d.project||{};return{project:h.project||p.name||'',address:h.address??p.location??'',client:h.client??p.client??'',wo:h.wo||'',contractor:h.contractor||'Atronic Systems Pvt. Ltd',work:h.work||'SITC of ELV System',invoice:h.invoice||'',period:h.period||`RA-${String(b.no).padStart(2,'0')}`}}
+function raHTML(b){const d=b.data;const H=raHdr(b);const secs=raSecs(d);const T=raTotals({...d,secs});const n=v=>v?fmtN(r2(v)):'';const a=v=>v?(r2(v)).toLocaleString('en-IN',{minimumFractionDigits:2,maximumFractionDigits:2}):'-';
+  const body=secs.map((s,si)=>{const st=raSecTot(s);return `<tr class="sec"><td>${SEC_LETTER(si)})</td><td colspan="16">${esc(s.name)}</td></tr>`+s.items.map(it=>`<tr class="itm"><td>${esc(it.sr)}</td><td class="d">${esc(it.desc)}</td><td>${esc(it.unit)}</td><td>${n(it.qty)}</td><td class="r">${a(it.rate)}</td><td class="r">${a((it.qty||0)*(it.rate||0))}</td><td colspan="11"></td></tr>`+
+    it.stages.map(x=>{const g=x.pct/100,pv=x.prev||0,th=x.qty||0;return `<tr><td></td><td class="d">${esc(stageText(x.k,x.pct,d.terms))}</td><td></td><td></td><td></td><td></td><td>${fmtN(x.pct)}%</td><td class="r">${a(it.rate)}</td><td>${n(pv)}</td><td>${n(th)}</td><td>${n(pv+th)}</td><td>${n(pv*g)}</td><td>${n(th*g)}</td><td>${n((pv+th)*g)}</td><td class="r">${a(pv*g*it.rate)}</td><td class="r">${a(th*g*it.rate)}</td><td class="r">${a((pv+th)*g*it.rate)}</td></tr>`}).join('')).join('')+
+    `<tr class="sub"><td></td><td>Sub Total</td><td colspan="3"></td><td class="r">${a(st.boq)}</td><td colspan="8"></td><td class="r">${a(st.prev)}</td><td class="r">${a(st.th)}</td><td class="r">${a(st.cum)}</td></tr>`}).join('');
+  const sumRows=secs.map((s,i)=>{const t=raSecTot(s);return `<tr><td>${i+1}</td><td style="text-align:left">${esc(s.name)}</td><td class="r">${a(t.boq)}</td><td class="r">${a(t.prev)}</td><td class="r">${a(t.th)}</td><td class="r">${a(t.cum)}</td></tr>`}).join('');
+  const gstR=v=>Math.round(v*(d.gst||0)/100);
+  return `<!doctype html><html><head><meta charset="utf-8"><title>RA bill ${b.no} – ${esc(H.project)}</title><style>
+  body{font:11.5px/1.35 Calibri,Arial,sans-serif;color:#000;margin:0;padding:22px 26px}table{border-collapse:collapse;width:100%}td,th{border:1px solid #444;padding:3px 5px;text-align:center;vertical-align:middle}
+  th{font-weight:700}.d{text-align:left;max-width:420px}.r{text-align:right;white-space:nowrap}.sec td{background:#FFFF00;font-weight:700;text-align:left}.sec td:first-child{text-align:center}.itm td{vertical-align:top}.sub td{font-weight:700;background:#f2f2f2}
+  .hd td{text-align:left;font-weight:700;font-size:12.5px;border:1px solid #000}.tot td{font-weight:700;font-size:12.5px}.y{background:#FFFF00}.g{background:#92D050}
+  h2{font:700 14px Trebuchet MS,Arial;margin:0 0 6px}.sum{width:auto;min-width:760px;font-family:Trebuchet MS,Arial;font-size:12px;margin-bottom:28px}.sum th{background:#E2F0D9}.sum .gt td{font-weight:700}.sum .gt td:nth-child(2){background:#FFFF00}.sum .nt td{font-weight:700}.sum .nt td:nth-child(2){background:#E2F0D9}
+  .tb{position:fixed;top:10px;right:14px}.tb button{font:inherit;padding:8px 14px;border-radius:6px;border:0;background:#24425E;color:#fff;cursor:pointer}@media print{.tb{display:none}body{padding:0}.pb{page-break-before:always}}</style></head><body>
+  <div class="tb"><button onclick="print()">Print / Save as PDF</button></div>
+  <table class="sum"><tr><th colspan="6">RA BILL NO ${b.no} SUMMARY</th></tr><tr><th rowspan="2">S. No.</th><th rowspan="2" style="text-align:left">Name of the System</th><th rowspan="2">BOQ Value without Tax</th><th colspan="3" style="color:#c00">Work Done Value</th></tr><tr><th>Previous Amount</th><th>This Bill Amount</th><th>Total Amount</th></tr>
+  ${sumRows}<tr class="gt"><td></td><td style="text-align:left">Grand Total</td><td class="r">${a(T.boq)}</td><td class="r">${a(T.prevG)}</td><td class="r">${a(T.thisG)}</td><td class="r">${a(T.cumG)}</td></tr>
+  <tr class="gt"><td></td><td style="text-align:left;background:none">Tax @${fmtN(d.gst||0)}%</td><td class="r">${a(gstR(T.boq))}</td><td class="r">${a(gstR(T.prevG))}</td><td class="r">${a(gstR(T.thisG))}</td><td class="r">${a(gstR(T.cumG))}</td></tr>
+  <tr class="nt"><td></td><td style="text-align:left">Net Total</td><td class="r">${a(T.boq+gstR(T.boq))}</td><td class="r">${a(T.prevG+gstR(T.prevG))}</td><td class="r">${a(T.thisG+gstR(T.thisG))}</td><td class="r">${a(T.cumG+gstR(T.cumG))}</td></tr>
+  ${d.ret?`<tr class="nt"><td></td><td style="text-align:left;background:none">Less: Retention @${fmtN(d.ret)}% of this bill</td><td></td><td></td><td class="r">− ${a(T.ret)}</td><td></td></tr><tr class="nt"><td></td><td style="text-align:left">Net payable this bill</td><td></td><td></td><td class="r">${a(T.thisG+gstR(T.thisG)-T.ret)}</td><td></td></tr>`:''}</table>
+  <table class="pb"><tr class="hd"><td colspan="8">Project:- ${esc(H.project)}</td><td colspan="3">Contractor:</td><td colspan="3"></td><td colspan="3" style="text-align:center">${esc(H.contractor)}</td></tr>
+  <tr class="hd"><td colspan="8">${esc(H.address)}</td><td colspan="3">Item of work:</td><td colspan="3"></td><td colspan="3" style="text-align:center">${esc(H.work)}</td></tr>
+  <tr class="hd"><td colspan="8">Client:- ${esc(H.client)}</td><td colspan="3">Tax Invoice No:</td><td colspan="3"></td><td colspan="3">${esc(H.invoice)}</td></tr>
+  <tr class="hd"><td colspan="8">WO No &amp; Date : ${esc(H.wo)}</td><td colspan="7">Period of R/A Bill:</td><td colspan="2">${esc(H.period)}</td></tr>
+  <tr class="hd"><td colspan="8"></td><td colspan="7">Date of Submission of R/A Bill:</td><td colspan="2">Date-${dmy(b.bill_date)}</td></tr>
+  <tr><th rowspan="2">Sl. No</th><th rowspan="2">DESCRIPTION</th><th rowspan="2">UNIT</th><th rowspan="2">QTY</th><th rowspan="2">RATE (Rs.)</th><th rowspan="2">AMOUNT (Rs.)</th><th rowspan="2">Part %</th><th rowspan="2">Part Rate</th><th colspan="3">Supplied Qty.</th><th colspan="3">Billing Qty.</th><th colspan="3">Amount Payable</th></tr>
+  <tr>${'<th>PREVIOUS</th><th>THIS BILL</th><th>CUMM.</th>'.repeat(3)}</tr>${body}
+  <tr class="tot"><td></td><td class="r y">Total Amount</td><td colspan="3"></td><td class="r">${a(T.boq)}</td><td colspan="8"></td><td class="r">${a(T.prevG)}</td><td class="r">${a(T.thisG)}</td><td class="r">${a(T.cumG)}</td></tr>
+  <tr class="tot"><td></td><td class="r">GST ${fmtN(d.gst||0)}%</td><td colspan="3"></td><td class="r">${a(T.boq*(d.gst||0)/100)}</td><td colspan="8"></td><td class="r">${a(T.prevG*(d.gst||0)/100)}</td><td class="r">${a(T.thisG*(d.gst||0)/100)}</td><td class="r">${a(T.cumG*(d.gst||0)/100)}</td></tr>
+  <tr class="tot"><td></td><td class="r g">Amount with GST</td><td colspan="3"></td><td class="r">${a(T.boq*(1+(d.gst||0)/100))}</td><td colspan="8"></td><td class="r">${a(T.prevG*(1+(d.gst||0)/100))}</td><td class="r">${a(T.thisG*(1+(d.gst||0)/100))}</td><td class="r">${a(T.cumG*(1+(d.gst||0)/100))}</td></tr></table></body></html>`}
+let _exceljs=null;
+function loadExcelJS(){if(window.ExcelJS)return Promise.resolve(window.ExcelJS);if(_exceljs)return _exceljs;
+  _exceljs=new Promise((res,rej)=>{const sc=document.createElement('script');sc.src='https://cdn.jsdelivr.net/npm/exceljs@4.4.0/dist/exceljs.min.js';sc.onload=()=>res(window.ExcelJS);sc.onerror=()=>{_exceljs=null;rej(new Error('Couldn’t load the Excel writer. Check your connection and try again.'))};document.head.appendChild(sc)});return _exceljs}
+async function raExcel(b){let ExcelJS;try{ExcelJS=await loadExcelJS()}catch(e){toast(e.message,6000);return}
+  const d=b.data;const H=raHdr(b);const secs=raSecs(d);const T=raTotals({...d,secs});const gst=(d.gst||0)/100;
+  const wb=new ExcelJS.Workbook();wb.creator='Atronic Project Tracker';
+  const sumWs=wb.addWorksheet('Summary',{pageSetup:{orientation:'portrait',fitToPage:true,fitToWidth:1,fitToHeight:0,paperSize:9}});const ws=wb.addWorksheet(`RA-${b.no}`,{views:[{state:'frozen',ySplit:7}],pageSetup:{orientation:'landscape',fitToPage:true,fitToWidth:1,fitToHeight:0,paperSize:9}});
+  const SN=`'RA-${b.no}'`;
+  const NF='_ * #,##0.00_ ;_ * \\-#,##0.00_ ;_ * "-"??_ ;_ @_ ';const thin={style:'thin'};const BOX={top:thin,left:thin,bottom:thin,right:thin};
+  const C=(r,c)=>ws.getCell(r,c);const F=(f,v)=>({formula:f,result:r2(v)});
+  const style=(cell,o={})=>{cell.border=BOX;cell.font={name:'Calibri',size:o.sz||11,bold:!!o.b,color:o.red?{argb:'FFFF0000'}:undefined};cell.alignment={horizontal:o.h||'center',vertical:o.v||'middle',wrapText:o.wrap!==false};if(o.nf)cell.numFmt=o.nf;if(o.fill)cell.fill={type:'pattern',pattern:'solid',fgColor:{argb:o.fill}}};
+  [6.6,70,7.6,9,15.6,19.8,7.2,15,10.4,10.8,9.8,10.4,10.2,9.8,22.4,19.6,22.4].forEach((w,i)=>ws.getColumn(i+1).width=w);
+  const hdr=[[`Project:- ${H.project}`,'Contractor:',H.contractor,'O'],[H.address,'Item of work:',H.work,'O'],[`Client:- ${H.client}`,'Tax Invoice No:',H.invoice,'P'],[`WO No & Date : ${H.wo}`,'Period of R/A Bill:',H.period,'P4'],['','Date of Submission of R/A Bill:',`Date-${dmy(b.bill_date)}`,'P4']];
+  hdr.forEach(([l,lab,v,pos],i)=>{const r=i+1;ws.mergeCells(r,1,r,8);C(r,1).value=l;style(C(r,1),{b:true,sz:12,h:'left'});
+    if(pos==='P4'){ws.mergeCells(r,9,r,15);ws.mergeCells(r,16,r,17);C(r,9).value=lab;C(r,16).value=v;style(C(r,9),{b:true,sz:12,h:'left'});style(C(r,16),{b:true,sz:12,h:'left'})}
+    else{ws.mergeCells(r,9,r,11);C(r,9).value=lab;style(C(r,9),{b:true,sz:12,h:'left'});for(let c=12;c<=14;c++)style(C(r,c),{});
+      if(pos==='O'){ws.mergeCells(r,15,r,17);C(r,15).value=v;style(C(r,15),{b:true,sz:12})}else{style(C(r,15),{});ws.mergeCells(r,16,r,17);C(r,16).value=v;style(C(r,16),{b:true,sz:12,h:'left'})}}});
+  ws.getRow(4).height=30;
+  ['Sl. No','DESCRIPTION','UNIT','QTY','RATE (Rs.)','AMOUNT (Rs.)','Part %','Part Rate'].forEach((t,i)=>{ws.mergeCells(6,i+1,7,i+1);C(6,i+1).value=t;style(C(6,i+1),{b:true,sz:12})});
+  [['Supplied Qty.',9],['Billing Qty.',12],['Amount Payable',15]].forEach(([t,c])=>{ws.mergeCells(6,c,6,c+2);C(6,c).value=t;style(C(6,c),{b:true,sz:12});['PREVIOUS','THIS BILL','CUMM.'].forEach((x,j)=>{C(7,c+j).value=x;style(C(7,c+j),{b:true,sz:12})})});
+  let r=8;const subRows=[];
+  secs.forEach((s,si)=>{const st=raSecTot(s);C(r,1).value=SEC_LETTER(si)+')';C(r,2).value=s.name;for(let c=1;c<=17;c++)style(C(r,c),{b:true,fill:'FFFFFF00',h:c===2?'left':'center'});r++;
+    for(let c=1;c<=17;c++)style(C(r,c),{});r++;const first=r;
+    s.items.forEach(it=>{const ir=r;C(r,1).value=it.sr;C(r,2).value=it.desc;C(r,3).value=it.unit;C(r,4).value=it.qty;C(r,5).value=it.rate;C(r,6).value=F(`D${r}*E${r}`,(it.qty||0)*(it.rate||0));
+      for(let c=1;c<=17;c++)style(C(r,c),{h:c===2?'left':'center',v:c===2?'top':'middle',nf:c===5||c===6?NF:undefined});ws.getRow(r).height=Math.min(180,Math.max(30,Math.ceil(it.desc.length/80)*15));r++;
+      it.stages.forEach(x=>{const g=x.pct/100,pv=x.prev||0,th=x.qty||0;
+        C(r,2).value=stageText(x.k,x.pct,d.terms);C(r,7).value=g;C(r,8).value=F(`E${ir}`,it.rate);C(r,9).value=pv;C(r,10).value=th;C(r,11).value=F(`I${r}+J${r}`,pv+th);
+        C(r,12).value=F(`I${r}*G${r}`,pv*g);C(r,13).value=F(`J${r}*G${r}`,th*g);C(r,14).value=F(`M${r}+L${r}`,(pv+th)*g);
+        C(r,15).value=F(`L${r}*H${r}`,pv*g*it.rate);C(r,16).value=F(`M${r}*H${r}`,th*g*it.rate);C(r,17).value=F(`P${r}+O${r}`,(pv+th)*g*it.rate);
+        for(let c=1;c<=17;c++)style(C(r,c),{h:c===2?'left':'center',nf:c===7?'0%':c>=8?NF:undefined});r++});
+      for(let c=1;c<=17;c++)style(C(r,c),{});r++});
+    C(r,2).value='Sub Total';[[6,'F',st.boq],[15,'O',st.prev],[16,'P',st.th],[17,'Q',st.cum]].forEach(([c,L,v])=>C(r,c).value=F(`SUM(${L}${first}:${L}${r-1})`,v));
+    for(let c=1;c<=17;c++)style(C(r,c),{b:true,fill:'FFF2F2F2',h:c===2?'left':'center',nf:NF});subRows.push(r);r+=2});
+  const tr=r,refs=L=>subRows.map(x=>L+x).join('+')||'0';
+  C(tr,2).value='Total Amount';C(tr+1,2).value=`GST ${fmtN(d.gst||0)}%`;C(tr+2,2).value='Amount with GST';
+  [[6,'F','boq'],[15,'O','prevG'],[16,'P','thisG'],[17,'Q','cumG']].forEach(([c,L,k])=>{C(tr,c).value=F(refs(L),T[k]);C(tr+1,c).value=F(`${L}${tr}*${d.gst||0}%`,T[k]*gst);C(tr+2,c).value=F(`${L}${tr+1}+${L}${tr}`,T[k]*(1+gst))});
+  for(let i=0;i<3;i++)for(let c=1;c<=17;c++)style(C(tr+i,c),{b:true,sz:12,h:c===2?'right':'right',nf:NF,fill:c===2?(i===0?'FFFFFF00':i===2?'FF92D050':undefined):undefined});
+  // Summary sheet, as in the samples
+  const S2=(r,c)=>sumWs.getCell(r,c);const sst=(cell,o={})=>{cell.border=BOX;cell.font={name:'Trebuchet MS',size:11,bold:!!o.b,color:o.red?{argb:'FFFF0000'}:undefined};cell.alignment={horizontal:o.h||'center',vertical:'middle',wrapText:true};if(o.nf)cell.numFmt=o.nf;if(o.fill)cell.fill={type:'pattern',pattern:'solid',fgColor:{argb:o.fill}}};
+  [11,30,20.6,19.2,19.2,19.2].forEach((w,i)=>sumWs.getColumn(i+1).width=w);
+  sumWs.mergeCells(1,1,1,6);S2(1,1).value=`RA BILL NO ${b.no} SUMMARY`;for(let c=1;c<=6;c++)sst(S2(1,c),{b:true,fill:'FFE2F0D9'});
+  [[1,'S. No.'],[2,'Name of the System'],[3,'BOQ Value without Tax']].forEach(([c,t])=>{sumWs.mergeCells(2,c,3,c);S2(2,c).value=t;sst(S2(2,c),{b:true,h:c===2?'left':'center'})});
+  sumWs.mergeCells(2,4,2,6);S2(2,4).value='Work Done Value';sst(S2(2,4),{b:true,red:true});['Previous Amount','This Bill Amount','Total Amount'].forEach((t,j)=>{S2(3,4+j).value=t;sst(S2(3,4+j),{b:true})});
+  const SNF='[>0]_ * #,##0.00_ ;[<0]_ * \\-#,##0.00_ ;_ * "-"#??_ ';let sr=4;
+  secs.forEach((s,i)=>{const t=raSecTot(s);const row=subRows[i];S2(sr,1).value=i+1;S2(sr,2).value=s.name;[[3,'F',t.boq],[4,'O',t.prev],[5,'P',t.th],[6,'Q',t.cum]].forEach(([c,L,v])=>S2(sr,c).value=F(`${SN}!${L}${row}`,v));
+    for(let c=1;c<=6;c++)sst(S2(sr,c),{h:c===2?'left':'center',nf:c>=3?SNF:undefined});for(let c=1;c<=6;c++)sst(S2(sr+1,c),{});sr+=2});
+  const g=sr+1;S2(g,2).value='Grand Total';S2(g+1,2).value=`Tax @${fmtN(d.gst||0)}%`;S2(g+2,2).value='Net Total';
+  ['C','D','E','F'].forEach((L,j)=>{const k=['boq','prevG','thisG','cumG'][j];const v=T[k];S2(g,3+j).value=F(`SUM(${L}4:${L}${g-1})`,v);S2(g+1,3+j).value=F(`ROUND(${L}${g}*${d.gst||0}%,0)`,Math.round(v*gst));S2(g+2,3+j).value=F(`${L}${g}+${L}${g+1}`,v+Math.round(v*gst))});
+  for(let i=0;i<3;i++)for(let c=1;c<=6;c++)sst(S2(g+i,c),{b:true,h:c===2?'left':'center',nf:c>=3?SNF:undefined,fill:c===2?(i===0?'FFFFFF00':i===2?'FFE2F0D9':undefined):undefined});
+  if(d.ret){S2(g+3,2).value=`Less: Retention @${fmtN(d.ret)}% of this bill`;S2(g+3,5).value=F(`ROUND(E${g}*${d.ret}%,0)`,Math.round(T.thisG*d.ret/100));S2(g+4,2).value='Net payable this bill';S2(g+4,5).value=F(`E${g+2}-E${g+3}`,T.thisG+Math.round(T.thisG*gst)-Math.round(T.thisG*d.ret/100));
+    for(let i=3;i<5;i++)for(let c=1;c<=6;c++)sst(S2(g+i,c),{b:true,h:c===2?'left':'center',nf:c>=3?SNF:undefined})}
+  const buf=await wb.xlsx.writeBuffer();saveBlob(new Blob([buf],{type:'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet'}),`RA_Bill_-_${b.no}_${String(H.period||'').replace(/^RA-?\d+\s*/i,'').replace(/[^\w.-]+/g,'_')||String(H.project).replace(/[^\w-]+/g,'_')}.xlsx`.replace(/_+\.xlsx$/,'.xlsx'))}
+function openHTML(html){const url=URL.createObjectURL(new Blob([html],{type:'text/html'}));const w=window.open(url,'_blank');if(!w){toast('Allow pop-ups for this site to open it.');return}setTimeout(()=>URL.revokeObjectURL(url),60000)}
+
 /* ---------- update an existing project from Excel ---------- */
 const UPD_KEYS=FIELDS.filter(f=>['data','status'].includes(f.cat)&&!f.legacy).map(f=>f.k);
 const OPEN_KEYS=FIELDS.filter(f=>f.cat==='opening').map(f=>f.k);
@@ -886,8 +1082,8 @@ async function goProject(pid,tab){if(pid!==S.pid){S.asEmail='';S.sel=new Set()}S
 const ACT={
   authMode:t=>{S.auth=t.dataset.m;S.authMsg='';render()},
   refresh:()=>{toast('Refreshing…',1500);refresh(true)},
-  bell:async()=>{S.bellOpen=!S.bellOpen;const a=S.alerts||{};if(S.bellOpen&&(a.decided||[]).some(x=>x.new)){a.decided.forEach(x=>{if(x.new){x._wasNew=true;x.new=false}});rpc('mark_alerts_seen').catch(()=>{});document.title=(alertCounts().all?`(${alertCounts().all}) `:'')+'Atronic Project Tracker'}render()},
-  alertGo:t=>{S.bellOpen=false;S.reqTab=t.dataset.t==='done'?'done':'pending';goProject(t.dataset.id,'approvals')},
+  bell:async()=>{S.bellOpen=!S.bellOpen;const a=S.alerts||{};if(S.bellOpen&&((a.decided||[]).some(x=>x.new)||(a.reqs||[]).some(x=>+x.new))){(a.decided||[]).forEach(x=>{if(x.new){x._wasNew=true;x.new=false}});(a.reqs||[]).forEach(x=>{x.new=0});rpc('mark_alerts_seen').catch(()=>{});document.title=(alertCounts().all?`(${alertCounts().all}) `:'')+'Atronic Project Tracker'}render()},
+  alertGo:t=>{S.bellOpen=false;if(t.dataset.t==='reqs'){S.reqF='open';goProject(t.dataset.id,'reqs');return}S.reqTab=t.dataset.t==='done'?'done':'pending';goProject(t.dataset.id,'approvals')},
   umenu:()=>$('#udrop').classList.toggle('open'),
   signOut:async()=>{await sb.auth.signOut()},
   editName:()=>{modal(`<h2>Your name</h2><form class="form" id="nform" onsubmit="return false"><label class="wide">Name shown to others<input name="n" value="${esc(S.me.name||'')}"></label></form><div class="row" style="justify-content:flex-end;margin-top:14px"><button class="btn" data-act="closeModal">Cancel</button><button class="btn pri" data-act="doName">Save</button></div>`)},
@@ -904,6 +1100,26 @@ const ACT={
   sel:t=>{const id=t.dataset.id;S.sel.has(id)?S.sel.delete(id):S.sel.add(id);render()},
   selAll:()=>{const ids=[...document.querySelectorAll('#main .selbox[data-act=sel]')].map(e=>e.dataset.id);const all=ids.every(i=>S.sel.has(i));ids.forEach(i=>all?S.sel.delete(i):S.sel.add(i));render()},
   selClear:()=>{S.sel=new Set();render()},
+  reqF:t=>{S.reqF=t.dataset.f;render()},reqExport:()=>reqExport(),reqNew:()=>reqModal(null),
+  reqEdit:t=>{const r=(PD().requirements||[]).find(x=>x.id===t.dataset.r);if(r)reqModal(r)},
+  reqStatus:t=>{const r=(PD().requirements||[]).find(x=>x.id===t.dataset.r);if(r)reqStatusModal(r)},
+  reqSave:async t=>{const v=Object.fromEntries(new FormData($('#rqform')));if(!String(v.title||'').trim()){toast('Describe what is required.');return}t.disabled=true;
+    try{if(t.dataset.r)await rpc('update_requirement',{rid:t.dataset.r,f:{title:v.title,qty:num(v.qty),unit:v.unit,need_by:v.need_by,location:v.location,priority:v.priority,note:v.note}});
+      else await rpc('add_requirement',{pid:S.pid,iid:v.item||null,title:v.title,qty:num(v.qty),unit:v.unit,need:v.need_by,loc:v.location,prio:v.priority,note:v.note});
+      closeModal();toast(t.dataset.r?'Requirement updated.':'Requirement raised. The office has been alerted.');await refresh(true)}catch(e){t.disabled=false;toast(errMsg(e),6000)}},
+  reqStatusSave:async t=>{const v=Object.fromEntries(new FormData($('#rsform')));t.disabled=true;try{await rpc('update_requirement',{rid:t.dataset.r,f:{status:v.status,status_note:v.status_note}});closeModal();toast('Requirement updated.');await refresh(true)}catch(e){t.disabled=false;toast(errMsg(e),6000)}},
+  reqCancel:async t=>{if(!await askConfirm('Cancel this requirement?','Cancel requirement',true))return;await after(rpc('update_requirement',{rid:t.dataset.r,f:{status:'cancelled'}}),'Requirement cancelled.').catch(()=>{})},
+  reqDel:async t=>{if(!await askConfirm('Delete this requirement permanently?','Delete',true))return;await after(rpc('delete_requirement',{rid:t.dataset.r}),'Requirement deleted.').catch(()=>{})},
+  raNew:()=>raModal(),
+  raCalc:()=>{const f=raForm();const c=computeRA(f.upto,f.terms);S._ra={...f,...c};raPreview()},
+  raSave:async t=>{const R=S._ra;if(!R)return;const f=raForm();Object.assign(R,{no:f.no,date:f.date,ret:f.ret,gst:f.gst,record:f.record,terms:f.terms,hdr:f.hdr});
+    const lines=[];R.secs.forEach(s=>s.items.forEach(it=>it.stages.forEach(st=>{if(st.qty>0)lines.push({item:it.item,stage:st.k,qty:st.qty})})));if(!lines.length){toast('Every quantity is zero — nothing to bill.');return}
+    const secs=R.secs.map(s=>({name:s.name,items:s.items.map(it=>({...it,stages:it.stages.map(({max,...x})=>x)}))}));const p=cur();
+    const bill={no:R.no,date:R.date,upto:R.upto,terms:R.terms,gst:R.gst,ret:R.ret,record:R.record,hdr:R.hdr,secs,lines,project:{name:p.name,client:p.client,location:p.location}};t.disabled=true;
+    try{const r=await rpc('save_ra_bill',{pid:S.pid,bill,record_lots:R.record});closeModal();S._ra=null;toast(`RA bill ${r.no} saved${R.record?` · ${r.lots} billing entries recorded`:''}.`,6000);await refresh(true)}catch(e){t.disabled=false;toast(errMsg(e),6000)}},
+  raPrint:t=>{const b=(PD().ra_bills||[]).find(x=>x.id===t.dataset.b);if(b)openHTML(raHTML(b))},
+  raXl:t=>{const b=(PD().ra_bills||[]).find(x=>x.id===t.dataset.b);if(b)raExcel(b)},
+  raDel:async t=>{const b=(PD().ra_bills||[]).find(x=>x.id===t.dataset.b);if(!b||!await askConfirm(`Delete RA bill ${b.no}? Its billing entries (RA-${b.no}) are removed from the tracker too.`,'Delete RA bill',true))return;await after(rpc('delete_ra_bill',{bid:b.id}),`RA bill ${b.no} deleted.`).catch(()=>{})},
   report:()=>reportModal(),
   rpRange:t=>{const to=today();let f=to;for(let i=1;i<+t.dataset.d;i++)f=dayBefore(f);$('#rpform [name=from]').value=f;$('#rpform [name=to]').value=to},
   rpPrint:()=>{const v=rpRange();if(!v)return;const url=URL.createObjectURL(new Blob([reportHTML(reportData(v.from,v.to))],{type:'text/html'}));const w=window.open(url,'_blank');if(!w){toast('Allow pop-ups for this site to open the report.');return}setTimeout(()=>URL.revokeObjectURL(url),60000);closeModal()},
@@ -968,12 +1184,14 @@ document.addEventListener('submit',e=>{const k=e.target.dataset.submit;if(!k)ret
 document.addEventListener('keydown',e=>{if(e.key==='Escape'){if($('#cfm.open'))return;if($('#modal').classList.contains('open'))closeModal();else if($('#drawer').classList.contains('open'))closeDrawer();return}
   if(e.key==='Enter'&&e.target.matches('tr[data-act],li[data-act]')){e.preventDefault();ACT[e.target.dataset.act](e.target)}});
 document.addEventListener('change',async e=>{const k=e.target.dataset&&e.target.dataset.change;if(!k)return;
-  if(k==='proj')goProject(e.target.value);else if(k==='asWho'){S.asEmail=e.target.value;render()}else if(k==='sec'){S.sec=e.target.value;render()}else if(k==='st'){S.st=e.target.value;render()}else if(k==='flag'){S.flag=e.target.checked;render()}
+  if(k==='proj')goProject(e.target.value);else if(k==='asWho'){S.asEmail=e.target.value;render()}else if(k==='rqItem'){const it=S.M.items.find(x=>x.id===e.target.value);const f=$('#rqform');if(it&&f){const E=f.elements;if(!E.title.value)E.title.value=String(it.desc||'').replace(/\s+/g,' ').slice(0,120);if(!E.unit.value)E.unit.value=it.unit||''}}else if(k==='sec'){S.sec=e.target.value;render()}else if(k==='st'){S.st=e.target.value;render()}else if(k==='flag'){S.flag=e.target.checked;render()}
   else if(k==='perm'){const m=(S.members||[]).find(x=>x.email===e.target.dataset.e);if(!m)return;const lv={...(m.levels||{}),[e.target.dataset.c]:e.target.value};e.target.disabled=true;
     try{await rpc('set_member',{pid:S.pid,em:m.email,lv});m.levels=lv;toast('Access updated.')}catch(err){toast(errMsg(err))}e.target.disabled=false}
   else if(k==='importFile'&&e.target.files[0])importFile(e.target.files[0]);
   else if(k==='updateFile'&&e.target.files[0])updateFromFile(e.target.files[0])});
-document.addEventListener('input',e=>{if(e.target.dataset&&e.target.dataset.po!=null&&S._poDraft){const p=S._poDraft[+e.target.dataset.po];if(p)p[e.target.dataset.f]=e.target.value;return}const k=e.target.dataset&&e.target.dataset.input;if(k==='docq'){S.docQ=e.target.value;render()}else if(k==='q'){S.q=e.target.value;render()}});
+document.addEventListener('input',e=>{if(e.target.dataset&&e.target.dataset.ra!=null&&S._ra){const E=S._ra.edit[+e.target.dataset.ra];if(E){const st=raStage(S._ra,E);const it=S._ra.secs[E.si].items[E.ii];st.qty=Math.max(0,num(e.target.value)||0);const a=$('#ra_a'+e.target.dataset.ra);if(a)a.textContent=rupees(st.qty*it.rate*st.pct/100);const f=raForm();S._ra.gst=f.gst;S._ra.ret=f.ret;$('#raTot').innerHTML=raTotHTML(raTotals(S._ra))}return}
+  if(e.target.dataset&&e.target.dataset.input==='raterm'){raTermSum();if(S._ra&&$('#raTot')){const f=raForm();S._ra.gst=f.gst;S._ra.ret=f.ret;$('#raTot').innerHTML=raTotHTML(raTotals(S._ra))}return}
+  if(e.target.dataset&&e.target.dataset.po!=null&&S._poDraft){const p=S._poDraft[+e.target.dataset.po];if(p)p[e.target.dataset.f]=e.target.value;return}const k=e.target.dataset&&e.target.dataset.input;if(k==='docq'){S.docQ=e.target.value;render()}else if(k==='reqq'){S.reqQ=e.target.value;render()}else if(k==='q'){S.q=e.target.value;render()}});
 window.addEventListener('focus',()=>{if(S.auth==='app'&&Date.now()-(S._lastFocus||0)>60000){S._lastFocus=Date.now();refresh(true)}});
 setInterval(()=>{if(S.auth==='app'&&document.visibilityState==='visible')loadAlerts().then(()=>{const b=$('.bellw');if(b&&!S.bellOpen)b.outerHTML=bellHTML()})},60000);
 setInterval(()=>{if(S.auth==='app'&&document.visibilityState==='visible'&&!$('#drawer').classList.contains('open')&&!$('#modal').classList.contains('open'))refresh(true)},120000);
