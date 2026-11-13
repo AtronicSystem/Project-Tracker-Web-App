@@ -65,6 +65,7 @@ const CATS=[
   {k:'billing',l:'Billing',hint:'Billed quantity lots with invoice / RA bill details'},
   {k:'docs',l:'Documents',hint:'Approved drawings, TDS, approval letters, challans, RA bills, invoices and test certificates'},
   {k:'requirements',l:'Site requirements',hint:'Raise material or work needed at site, and track it until it is fulfilled'},
+  {k:'rabill',l:'RA bill',hint:'Build, view and download RA bills. Can edit = build and delete bills (sees WO rates); Only see = view and download bills',noReq:1},
 ];
 const CATMAP=Object.fromEntries(CATS.map(c=>[c.k,c]));
 const CAT_FIELDS={data:FIELDS.filter(f=>f.cat==='data').map(f=>f.k),status:FIELDS.filter(f=>f.cat==='status').map(f=>f.k)};
@@ -77,7 +78,7 @@ const KIND={delivery:{tot:'dTot',date:'dDate',open:'delivered',openDate:'deliver
   handover:{tot:'hTot',date:'hDate',open:'handedOver',openDate:'handoverDate',ref:'Handover document / area',done:'Handed over'},
   billing:{ref:'Invoice / RA bill no.'}};
 const LVL_LABEL={edit:'Can edit',request:'Needs approval',none:'Only see',hide:'No access'};
-const DEFAULT_LEVELS={data:'none',status:'request',delivery:'request',install:'request',testing:'request',commission:'request',handover:'request',billing:'hide',docs:'none',requirements:'request'};
+const DEFAULT_LEVELS={data:'none',status:'request',delivery:'request',install:'request',testing:'request',commission:'request',handover:'request',billing:'hide',docs:'none',requirements:'request',rabill:'hide'};
 const DOCSECS=[{k:'drawing',l:'Approved drawings',sys:1,no:'Drawing no.',rev:1},{k:'tds',l:'Approved TDS',sys:1,no:'TDS / datasheet ref.',rev:1},{k:'letter',l:'Approval letters',no:'Letter ref. no.'},{k:'challan',l:'Delivery challans',no:'Challan / DC no.',needs:'delivery'},{k:'rabill',l:'RA bills',no:'RA bill no.',needs:'billing'},{k:'invoice',l:'Invoices',no:'Invoice no.',needs:'billing'},{k:'testcert',l:'Test certificates',sys:1,no:'Certificate / report no.',needs:'testing',dateL:'Test date',ph:'e.g. CCTV – Level 1 test report'}];
 const DOCMAP=Object.fromEntries(DOCSECS.map(d=>[d.k,d]));
 const DOC_EXT=['dwg','dxf','pdf','xls','xlsx','xlsm','csv','doc','docx','jpg','jpeg','png'];
@@ -331,7 +332,7 @@ function projOpts(){return S.projects.filter(p=>!p.deleted_at).map(x=>`<option v
 function projectBar(){
   const p=cur();const pc=isAdmin()?pendingAll().length:pendingAll().filter(r=>r.mine).length;
   const rqOpen=(PD()&&PD().requirements||[]).filter(r=>r.status==='raised').length;const rqBadge=['admin','edit'].includes(myLevel('requirements'))?rqOpen:0;
-  const tabs=[['tracker','Tracker'],...(canView('docs')?[['docs','Documents']]:[]),...(canView('requirements')?[['reqs','Site requirements']]:[]),['approvals','Pending update requests'],...(isAdmin()?[['ra','RA bills']]:[]),['activity','Activity'],['access','Access']];
+  const tabs=[['tracker','Tracker'],...(canView('docs')?[['docs','Documents']]:[]),...(canView('requirements')?[['reqs','Site requirements']]:[]),['approvals','Pending update requests'],...(isAdmin()||canView('rabill')?[['ra','Build RA bill']]:[]),['activity','Activity'],['access','Access']];
   return `<div class="pbar2"><div class="crumb"><button class="lnk" data-act="view" data-v="projects">Projects</button><span class="muted">›</span>
     <label class="sr" for="projSel">Project</label><select id="projSel" data-change="proj">${projOpts()}</select>
     <span class="muted" style="font-size:13px">${esc([p.client,p.location].filter(Boolean).join(', '))}</span>
@@ -341,7 +342,7 @@ function projectBar(){
 function vProject(){
   if(!S.pid||!cur())return vProjects();
   if(!PD())return projectBar()+`<div class="panel muted"><span class="spin"></span> Loading project…</div>`;
-  const b=S.ptab==='reqs'&&canView('requirements')?vReqs():S.ptab==='ra'&&isAdmin()?vRA():S.ptab==='docs'&&canView('docs')?vDocs():S.ptab==='approvals'?vRequests():S.ptab==='activity'?vActivity():S.ptab==='access'?vAccess():vTracker();
+  const b=S.ptab==='reqs'&&canView('requirements')?vReqs():S.ptab==='ra'&&(isAdmin()||canView('rabill'))?vRA():S.ptab==='docs'&&canView('docs')?vDocs():S.ptab==='approvals'?vRequests():S.ptab==='activity'?vActivity():S.ptab==='access'?vAccess():vTracker();
   return projectBar()+b;
 }
 
@@ -570,11 +571,11 @@ function vActivity(){const a=PD().activity||[];
   <div class="panel">${a.length?`<ul class="log">${a.map(e=>`<li><div><strong>${esc(e.by_name||'')}</strong> ${esc(e.text)}</div><div class="row" style="gap:12px;margin-top:3px"><span class="when">${fmtTime(e.at)}</span>${e.item_id&&S.M.items.find(x=>x.id===e.item_id)?`<button class="lnk" data-act="open" data-id="${esc(e.item_id)}">Open item</button>`:''}</div></li>`).join('')}</ul>`:'<p class="muted">No changes recorded yet.</p>'}</div>`}
 
 /* access */
-function lvlSel(email,c,val){return `<select data-change="perm" data-e="${esc(email)}" data-c="${c}" aria-label="${esc(CATMAP[c].l)}">${['edit','request','none','hide'].map(o=>`<option value="${o}" ${o===val?'selected':''}>${LVL_LABEL[o]}</option>`).join('')}</select>`}
+function lvlSel(email,c,val){if(CATMAP[c].noReq&&val==='request')val='none';return `<select data-change="perm" data-e="${esc(email)}" data-c="${c}" aria-label="${esc(CATMAP[c].l)}">${(CATMAP[c].noReq?['edit','none','hide']:['edit','request','none','hide']).map(o=>`<option value="${o}" ${o===val?'selected':''}>${LVL_LABEL[o]}</option>`).join('')}</select>`}
 function vAccess(){
   if(!isAdmin()){return `<h2 style="margin:0">Your access on ${esc(cur().name)}</h2><p class="muted" style="margin:4px 0 16px">An admin decides what each person can change. “Needs approval” means your entries wait for an admin before they count.</p>
     <div class="panel"><table class="stbl"><tbody>${CATS.map(c=>{const l=myLevel(c.k);return `<tr><td><strong>${esc(c.l)}</strong><div class="muted" style="font-size:12.5px">${esc(c.hint)}</div></td><td><span class="lvl ${l}">${LVL_LABEL[l]}</span></td></tr>`}).join('')}</tbody></table></div>
-    <p class="muted" style="font-size:12.5px">Rates and values are visible to admins only.</p>`}
+    <p class="muted" style="font-size:12.5px">Rates and values are visible to admins only, and to people with “RA bill: Can edit”.</p>`}
   const m=S.members;if(!m)return `<div class="panel muted"><span class="spin"></span> Loading people…</div>`;
   const others=S.projects.filter(p=>p.id!==S.pid&&!p.deleted_at);
   return `<div class="row"><h2 style="margin:0">Access for ${esc(cur().name)}</h2>${others.length?`<span class="row" style="margin-left:auto"><label class="sr" for="cpfrom">Copy access from</label><select id="cpfrom" style="padding:6px 8px;border:1px solid var(--line);border-radius:6px;background:var(--panel)">${others.map(p=>`<option value="${esc(p.id)}">${esc(p.name)}</option>`).join('')}</select><button class="btn" data-act="copyPerms">Copy access</button></span>`:''}</div>
@@ -587,13 +588,13 @@ function vAccess(){
 function addPersonModal(){
   modal(`<h2>Add person to ${esc(cur().name)}</h2><p class="muted" style="margin:0 0 12px">Works for colleagues and outside people (vendors, consultants, clients). Send them the app link; they create an account with this email.</p>
   <form class="form" id="apform" onsubmit="return false"><label class="wide">Email<input name="email" type="email" required placeholder="name@company.com"></label>
-  <label class="wide">Start with<select name="preset"><option value="site">Site team — records delivery to handing over (needs approval)</option><option value="view">View only — sees progress, no billing</option><option value="billing">Billing — records RA bills</option><option value="vendor">Vendor — sends deliveries for approval, sees drawings & TDS</option></select></label></form>
+  <label class="wide">Start with<select name="preset"><option value="site">Site team — records delivery to handing over (needs approval)</option><option value="view">View only — sees progress, no billing</option><option value="billing">Billing — records billing and builds RA bills</option><option value="vendor">Vendor — sends deliveries for approval, sees drawings & TDS</option></select></label></form>
   <p class="muted" style="font-size:12.5px">You can fine-tune each area in the table afterwards.</p>
   <div class="row" style="justify-content:flex-end;margin-top:14px"><button class="btn" data-act="closeModal">Cancel</button><button class="btn pri" data-act="doAddPerson">Add person</button></div>`)}
-const PRESETS={site:{data:'none',status:'request',delivery:'request',install:'request',testing:'request',commission:'request',handover:'request',billing:'hide',docs:'request',requirements:'request'},
-  view:{data:'none',status:'none',delivery:'none',install:'none',testing:'none',commission:'none',handover:'none',billing:'hide',docs:'none',requirements:'none'},
-  billing:{data:'none',status:'hide',delivery:'none',install:'hide',testing:'hide',commission:'hide',handover:'hide',billing:'edit',docs:'request',requirements:'hide'},
-  vendor:{data:'none',status:'none',delivery:'request',install:'none',testing:'none',commission:'none',handover:'none',billing:'hide',docs:'none',requirements:'none'}};
+const PRESETS={site:{data:'none',status:'request',delivery:'request',install:'request',testing:'request',commission:'request',handover:'request',billing:'hide',docs:'request',requirements:'request',rabill:'hide'},
+  view:{data:'none',status:'none',delivery:'none',install:'none',testing:'none',commission:'none',handover:'none',billing:'hide',docs:'none',requirements:'none',rabill:'hide'},
+  billing:{data:'none',status:'hide',delivery:'none',install:'hide',testing:'hide',commission:'hide',handover:'hide',billing:'edit',docs:'request',requirements:'hide',rabill:'edit'},
+  vendor:{data:'none',status:'none',delivery:'request',install:'none',testing:'none',commission:'none',handover:'none',billing:'hide',docs:'none',requirements:'none',rabill:'hide'}};
 
 /* admins */
 function vAdmins(){const a=S.admins;
@@ -911,16 +912,17 @@ function computeRA(upto,terms){const rates=PD().rates||{};let noRate=0;const edi
     return{item:it.id,sr:it.sr||'',desc:String(it.desc||'').replace(/\s+/g,' ').trim(),unit:it.unit||'',qty:t,rate,stages}})})).filter(s=>s.items.length);
   secs.forEach((s,si)=>s.items.forEach((it,ii)=>it.stages.forEach((st,ki)=>{if(st.max>0)edit.push({si,ii,ki})})));
   return{secs,edit,noRate}}
-function vRA(){const bills=[...(PD().ra_bills||[])].sort((a,b)=>b.no-a.no);const rates=PD().rates||{};const anyRate=Object.values(rates).some(r=>num(r.w));
-  return `<div class="row" style="margin-bottom:12px"><div><h2 style="margin:0">RA bills</h2><p class="muted" style="margin:4px 0 0;max-width:85ch">Generate the next running-account bill from work recorded since the last one: for every BOQ item and payment stage, quantity done less quantity already billed, at the WO rate × stage %. The Excel matches your RA bill format (Summary sheet + item-wise sheet with formulas). Only admins see this tab.</p></div>
-    <button class="btn pri" style="margin-left:auto" data-act="raNew" ${anyRate?'':'disabled'}>+ Generate RA bill</button></div>
-  ${anyRate?'':'<div class="panel" style="margin-bottom:12px">No WO unit rates on this project yet. Add rates (Rates in an item, or Update from Excel with a “Unit rate WO” column) to generate RA bills.</div>'}
+const canRA=()=>isAdmin()||myLevel('rabill')==='edit';
+function vRA(){const ed=canRA();const bills=[...(PD().ra_bills||[])].sort((a,b)=>b.no-a.no);const rates=PD().rates||{};const anyRate=Object.values(rates).some(r=>num(r.w));
+  return `<div class="row" style="margin-bottom:12px"><div><h2 style="margin:0">Build RA bill</h2><p class="muted" style="margin:4px 0 0;max-width:85ch">Generate the next running-account bill from work recorded since the last one: for every BOQ item and payment stage, quantity done less quantity already billed, at the WO rate × stage %. The Excel matches your RA bill format (Summary sheet + item-wise sheet with formulas).${ed?'':' You can view and download the bills; building new ones is done by the office.'}</p></div>
+    ${ed?`<button class="btn pri" style="margin-left:auto" data-act="raNew" ${anyRate?'':'disabled'}>+ Build RA bill</button>`:''}</div>
+  ${anyRate||!ed?'':'<div class="panel" style="margin-bottom:12px">No WO unit rates on this project yet. Add rates (Rates in an item, or Update from Excel with a “Unit rate WO” column) to generate RA bills.</div>'}
   <div class="tbl-wrap"><table class="ttbl"><thead><tr><th>RA bill</th><th>Bill date</th><th>Work up to</th><th>Previous bills</th><th>This bill</th><th>GST</th><th>Amount with GST</th><th>Generated by</th><th></th></tr></thead><tbody>
   ${bills.map(b=>{const T=raTotals(b.data);return `<tr><td><strong>RA-${b.no}</strong>${b.data.hdr&&b.data.hdr.period?`<div class="mk">${esc(b.data.hdr.period)}</div>`:''}${b.data.record?'':'<div class="mk">not recorded in tracker</div>'}</td><td>${esc(fmtDate(b.bill_date))}</td><td>${esc(fmtDate(b.upto))}</td><td>${rupees(T.prevG)}</td><td><strong>${rupees(T.thisG)}</strong></td><td>${rupees(T.gst)}</td><td><strong>${rupees(T.net)}</strong></td>
-    <td>${esc(b.created_by_name||'')}<div class="mk">${fmtTime(b.created_at)}</div></td><td style="white-space:nowrap"><button class="btn" style="padding:4px 10px;font-size:12.5px" data-act="raXl" data-b="${esc(b.id)}">Excel</button> <button class="btn" style="padding:4px 10px;font-size:12.5px" data-act="raPrint" data-b="${esc(b.id)}">Print / PDF</button> <button class="lnk bad" data-act="raDel" data-b="${esc(b.id)}">Delete</button></td></tr>`}).join('')||'<tr><td colspan="9" class="muted" style="padding:22px">No RA bills yet.</td></tr>'}</tbody></table></div>`}
+    <td>${esc(b.created_by_name||'')}<div class="mk">${fmtTime(b.created_at)}</div></td><td style="white-space:nowrap"><button class="btn" style="padding:4px 10px;font-size:12.5px" data-act="raXl" data-b="${esc(b.id)}">Excel</button> <button class="btn" style="padding:4px 10px;font-size:12.5px" data-act="raPrint" data-b="${esc(b.id)}">Print / PDF</button>${ed?` <button class="lnk bad" data-act="raDel" data-b="${esc(b.id)}">Delete</button>`:''}</td></tr>`}).join('')||'<tr><td colspan="9" class="muted" style="padding:22px">No RA bills yet.</td></tr>'}</tbody></table></div>`}
 function raModal(){const p=PD().project||{};const bt=p.bill_terms||{};const terms={...DEFAULT_TERMS,...bt};const next=Math.max(0,...(PD().ra_bills||[]).map(b=>b.no))+1;const pr=cur();
   const inp=(n,l,v,ph='',w='')=>`<label ${w}>${l}<input name="${n}" value="${esc(v??'')}" placeholder="${esc(ph)}"></label>`;
-  modal(`<h2>Generate RA bill</h2><p class="muted" style="margin:0 0 12px">${esc(pr.name)} · quantities are worked out from the tracker; you can change them before saving.</p>
+  modal(`<h2>Build RA bill</h2><p class="muted" style="margin:0 0 12px">${esc(pr.name)} · quantities are worked out from the tracker; you can change them before saving.</p>
   <form class="form" id="raform" onsubmit="return false" style="grid-template-columns:repeat(auto-fit,minmax(150px,1fr))">
   <label>RA bill no.<input name="no" type="number" min="1" value="${next}"></label><label>Date of submission<input name="date" type="date" value="${today()}"></label><label>Work done up to<input name="upto" type="date" value="${today()}"></label>
   <label>GST %<input name="gst" data-input="raterm" type="number" step="any" min="0" value="${esc(bt._gst!=null?bt._gst:18)}"></label><label>Retention %<input name="ret" data-input="raterm" type="number" step="any" min="0" value="${esc(bt._ret!=null?bt._ret:0)}"></label>
